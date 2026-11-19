@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
 import { AuthGate, AuthOverlay } from 'deepspace'
 import { Button } from '@/components/ui'
+import '../../../game/game.css'
 
 export default function ProtectedLayout() {
   return (
@@ -30,20 +31,15 @@ function SignedOutPanel() {
   const [showAuthModal, setShowAuthModal] = useState(false)
 
   return (
-    <div className="flex min-h-[60vh] items-center justify-center px-6 py-20">
-      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-8 text-center">
-        <h1 className="text-lg font-semibold text-foreground">Sign in to continue</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          This page is only available to signed-in users.
-        </p>
-        <Button className="mt-6 w-full" onClick={() => setShowAuthModal(true)}>
-          Sign in
+    <div className="si-menu">
+      <div className="si-card" style={{ width: 'min(420px, 100%)', padding: 28, textAlign: 'center', background: 'rgba(16,13,40,.75)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 22 }}>
+        <div className="si-title" style={{ fontSize: 22 }}>SABOTEUR ISLAND</div>
+        <p className="si-small" style={{ margin: '12px 0 18px' }}>Sign in so the game knows who you are. Your role stays secret from everyone else.</p>
+        <Button className="w-full" onClick={() => setShowAuthModal(true)}>
+          Sign in to play
         </Button>
-        <Link
-          to="/"
-          className="mt-4 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-        >
-          Back to home
+        <Link to="/" className="si-small" style={{ display: 'inline-block', marginTop: 14 }}>
+          Back to the island
         </Link>
       </div>
 
