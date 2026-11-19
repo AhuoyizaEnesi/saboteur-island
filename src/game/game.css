@@ -22,7 +22,7 @@
 }
 .si * { box-sizing: border-box; }
 .si button { font-family: inherit; }
-.si-stage { position: absolute; inset: 0; }
+.si-stage { position: absolute; inset: 0; z-index: 0; isolation: isolate; }
 .si-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0) 50%, rgba(2, 1, 10, 0.82) 100%); transition: background 1s; }
 .si-vignette.dark { background: radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0) 12%, rgba(1, 0, 6, 0.93) 58%); }
 
@@ -150,15 +150,26 @@
 .si-input:focus { border-color: rgba(124, 247, 255, 0.5); }
 
 @media (max-width: 1100px) {
-  .si-hud-right .si-feed-card { display: none; }
-  .si-command { width: calc(100vw - 40px); min-width: 0; bottom: 16px; }
-  .si-actions { left: auto; right: 18px; bottom: 150px; width: 200px; }
+  .si-hud-left .si-feed-card { display: none; }
 }
+/* Phones: tasks and the clock stay on screen; the player list and feed step aside. */
 @media (max-width: 720px) {
-  .si-hud-left { width: auto; right: 18px; }
-  .si-hud-left .si-tasks-card, .si-hud-right { display: none; }
-  .si-actions { flex-direction: row; width: auto; left: 18px; right: 18px; }
-  .si-chips .si-chip:nth-child(n + 3) { display: none; }
+  .si-hud-left { top: 10px; left: 10px; width: min(250px, 62vw); gap: 8px; }
+  .si-hud-left .si-brand { display: none; }
+  .si-hud-left .si-card { padding: 10px 12px; border-radius: 14px; }
+  .si-task { font-size: 11.5px; }
+  .si-hud-right { top: 10px; right: 10px; width: auto; }
+  .si-hud-right .si-players { display: none; }
+  .si-hud-right .si-card { padding: 10px 12px; border-radius: 14px; }
+  .si-timer { font-size: 20px; }
+  .si-sky { width: 22px; height: 22px; }
+  .si-actions { right: 10px; bottom: 12px; width: min(240px, 60vw); }
+  .si-walkhint { display: none !important; }
+  .si-order { bottom: 10px; }
+  .si-lobby { top: 10px; left: 10px; right: 10px; }
+  .si-lobby .si-panel { width: 100%; padding: 16px; }
+  .si-lobby-code { font-size: 38px; }
+  .si-meeting { top: auto; height: 62vh; right: 8px; left: 8px; bottom: 8px; width: auto; }
 }
 @keyframes si-fade-out { to { opacity: 0; visibility: hidden; } }
 
@@ -280,3 +291,25 @@
   .si-landing-how { flex-direction: column; gap: 6px; bottom: 44px; }
   .si-landing-shade { background: linear-gradient(180deg, rgba(7, 11, 28, 0.2) 0%, rgba(7, 11, 28, 0.85) 60%); }
 }
+
+/* Name tags stay out of the way of full screen moments. */
+.si.phase-intro .si-place, .si.phase-intro .si-label, .si.phase-eject .si-place, .si.phase-eject .si-label { visibility: hidden; }
+
+/* Keyboard focus is always visible. */
+.si button:focus-visible, .si a:focus-visible, .si input:focus-visible, .si-menu button:focus-visible, .si-menu a:focus-visible, .si-landing a:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+/* ── mini map ── */
+.si-map-card { padding: 10px; display: flex; justify-content: center; }
+.si-minimap { width: 190px; height: 190px; display: block; }
+.si-minimap .land { fill: rgba(93, 180, 90, 0.28); stroke: rgba(255, 255, 255, 0.18); stroke-width: 0.2; }
+.si-minimap .pond { fill: rgba(70, 194, 255, 0.45); }
+.si-minimap .mark { fill: rgba(236, 233, 255, 0.55); }
+.si-minimap .mark.bell { fill: #ff4d6d; }
+.si-minimap .mark.todo { fill: #ffd166; }
+.si-minimap .mark.broken { fill: #ff4d6d; }
+.si-minimap .mark.alarm { fill: #ff4d6d; }
+.si-minimap .halo { fill: none; stroke: #ffd166; stroke-width: 0.3; opacity: 0.8; animation: si-ping 1.6s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+.si-minimap g:has(.broken) .halo, .si-minimap g:has(.alarm) .halo { stroke: #ff4d6d; }
+.si-minimap .me { fill: #7cf7ff; stroke: #06101f; stroke-width: 0.25; }
+@keyframes si-ping { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(1.4); opacity: 0; } }
+@media (max-width: 720px) { .si-map-card { display: none; } }

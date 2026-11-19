@@ -457,7 +457,7 @@ export class IslandScene {
       const c: Character = {
         player: p, model, label, labelDiv: div, pos: start, target: null, home, nextWander: this.elapsed + rand(1, 4),
         walkPhase: rand(0, 6), heading: rand(0, Math.PI * 2), ejecting: false, ejectT: 0, ejectV: new THREE.Vector3(),
-        gone: !p.alive && !p.ghost, remote: null, busyUntil: 0, route: null, ghost: false,
+        gone: !p.alive && !p.ghost, remote: null, busyUntil: 0, route: this.routeMap[p.id] ?? null, ghost: false,
       }
       if (!p.alive && !p.ghost) {
         model.root.visible = false
@@ -528,8 +528,11 @@ export class IslandScene {
 
   /** AI players walk their planned legs; everyone draws the same legs. */
   setRoutes(routes: Record<string, Leg[]>) {
+    this.routeMap = routes
     for (const [id, c] of this.characters) c.route = routes[id] ?? null
   }
+
+  private routeMap: Record<string, Leg[]> = {}
 
   /** Smoke and rubble where a finished task was wrecked. */
   setBreaks(list: SceneBreak[]) {
@@ -611,10 +614,11 @@ export class IslandScene {
     this.meeting = on
     this.bellRing = on ? 2.5 : 0
     const alive = [...this.characters.values()].filter((c) => !c.gone && !c.ejecting)
-    alive.forEach((c, i) => {
+    alive.forEach((c) => {
       if (on) {
-        const a = (i / Math.max(1, alive.length)) * Math.PI * 2 + 0.4
-        const seat = new THREE.Vector2(MEETING_SPOT.x + Math.cos(a) * 1.55, MEETING_SPOT.z + Math.sin(a) * 1.55)
+        // Same seats the server uses (seatSpot in src/actions/game.ts), so every browser agrees.
+        const a = (c.player.seat / 6) * Math.PI * 2 + 2.3
+        const seat = this.clampWalkable(MEETING_SPOT.x + Math.cos(a) * 1.55, MEETING_SPOT.z + Math.sin(a) * 1.55)
         c.pos.copy(seat)
         c.target = null
         c.remote = null
@@ -1354,7 +1358,8 @@ export class IslandScene {
     if (!me || this.meeting) return
     const ground = terrainH(me.pos.x, me.pos.y)
     const focus = this.island.localToWorld(this.tmpV.set(me.pos.x, ground + 0.35, me.pos.y)).clone()
-    const z = this.followZoom
+    // Narrow portrait screens see less sideways, so the camera pulls back.
+    const z = this.followZoom * (this.camera.aspect < 0.8 ? 1.55 : 1)
     const want = focus.clone().add(new THREE.Vector3(0, 4.9 * z, 5.3 * z))
     const k = Math.min(1, dt * 5)
     this.camera.position.lerp(want, k)

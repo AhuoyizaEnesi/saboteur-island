@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth, usePresenceRoom } from 'deepspace'
-import { Bell, Ghost, Hammer, Link as LinkIcon, Megaphone, Moon, Paintbrush, SendHorizontal, Sun, Sunset, Trash2, Undo2, Wrench, X, Zap } from 'lucide-react'
+import { Bell, Ghost, Hammer, Link as LinkIcon, Megaphone, Moon, Paintbrush, SendHorizontal, Sun, Sunset, Trash2, Undo2, Volume2, VolumeX, Wrench, X, Zap } from 'lucide-react'
+import { isMuted, play, setMuted, unlockSound } from '../sound'
 import { callAction, serverNow } from '../api'
 import {
   BELL_RANGE,
@@ -31,6 +32,7 @@ import { fmtClock, useGameData, useNow, type Rec } from '../useGame'
 import type { PlayerRow } from '../types'
 import { IslandView } from './IslandView'
 import { IslanderIcon } from './IslanderIcon'
+import { MiniMap } from './MiniMap'
 import '../game.css'
 
 type Banner = { key: number; title: string; sub?: string; tone: 'crew' | 'bad' | 'gold' }
@@ -75,6 +77,17 @@ export function GameScreen({ code }: { code: string }) {
   const presence = usePresenceRoom(`game:${gameId || 'pending'}`)
   const nameOf = useCallback((id: string) => players.find((p) => p.id === id)?.data.name ?? 'Someone', [players])
   const colorOf = useCallback((id: string) => players.find((p) => p.id === id)?.data.color ?? SEAT_COLORS[0], [players])
+
+  const [muted, setMutedState] = useState(isMuted)
+  useEffect(() => {
+    const unlock = () => unlockSound()
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [])
 
   const flash = useCallback((text: string, good = false) => {
     setToast({ text, good })
@@ -209,16 +222,28 @@ export function GameScreen({ code }: { code: string }) {
     }
   }, [scene, peers, meId])
 
+  // Whether this tab is in front. Browsers slow timers in background tabs, so
+  // a hidden tab should not be the one running the game clock.
+  const [visible, setVisible] = useState(() => typeof document === 'undefined' || !document.hidden)
+  useEffect(() => {
+    const on = () => setVisible(!document.hidden)
+    document.addEventListener('visibilitychange', on)
+    return () => document.removeEventListener('visibilitychange', on)
+  }, [])
+
   // Broadcast my position to other browsers about ten times a second.
   const lastSent = useRef(0)
   const pendingSend = useRef<number | null>(null)
   const broadcast = useCallback(() => {
     pendingSend.current = null
     const p = myPos.current
-    if (!p || !meId) return
+    if (!meId) return
     lastSent.current = performance.now()
-    updateState({ pid: meId, x: Math.round(p.x * 100) / 100, z: Math.round(p.z * 100) / 100 })
-  }, [meId, updateState])
+    updateState({ pid: meId, vis: visible, ...(p ? { x: Math.round(p.x * 100) / 100, z: Math.round(p.z * 100) / 100 } : {}) })
+  }, [meId, updateState, visible])
+  useEffect(() => {
+    broadcast()
+  }, [broadcast])
   const onMyMove = useCallback(
     (x: number, z: number) => {
       myPos.current = { x, z }
@@ -264,13 +289,21 @@ export function GameScreen({ code }: { code: string }) {
   }, [gameId, canWalk])
 
   // ─── the clock: one browser advances the game ─────────────────────────────
+  // The host's browser ticks if its tab is in front; otherwise the first
+  // human whose tab is in front; if every tab is hidden, any online human.
   const onlineUserIds = useMemo(() => new Set([...(userId ? [userId] : []), ...peers.map((p) => p.userId)]), [userId, peers])
+  const visibleUserIds = useMemo(() => {
+    const out = new Set<string>()
+    if (userId && visible) out.add(userId)
+    for (const p of peers) if ((p.state as { vis?: boolean })?.vis !== false) out.add(p.userId)
+    return out
+  }, [userId, visible, peers])
   const ticker = useMemo(() => {
     if (!g) return null
-    if (onlineUserIds.has(g.hostId)) return g.hostId
-    const humans = players.filter((p) => !p.data.isBot && onlineUserIds.has(p.data.userId))
-    return humans[0]?.data.userId ?? null
-  }, [g, players, onlineUserIds])
+    const humans = players.filter((p) => !p.data.isBot)
+    const pick = (ids: Set<string>) => (ids.has(g.hostId) ? g.hostId : humans.find((p) => ids.has(p.data.userId))?.data.userId ?? null)
+    return pick(visibleUserIds) ?? pick(onlineUserIds)
+  }, [g, players, onlineUserIds, visibleUserIds])
   const iTick = Boolean(userId && ticker === userId)
   const inflight = useRef(false)
   useEffect(() => {
@@ -300,13 +333,17 @@ export function GameScreen({ code }: { code: string }) {
     else if (phase === 'play') setBanner({ key: Date.now(), title: 'Back to work', sub: 'The night clock is running again', tone: 'crew' })
     else if (phase === 'meeting') {
       setOrderFor(null)
+      play('bell')
       setBanner({
         key: Date.now(),
         title: g.meetingReason === 'report' ? 'Something was wrecked' : 'Emergency meeting',
         sub: g.meetingReason === 'report' ? `${g.meetingCalledBy} found it at the ${g.meetingWhere}` : `${g.meetingCalledBy} rang the bell`,
         tone: 'bad',
       })
-    } else if (phase === 'vote') setBanner({ key: Date.now(), title: 'Vote now', sub: 'Pick who to eject, or skip', tone: 'gold' })
+    } else if (phase === 'vote') {
+      play('tick')
+      setBanner({ key: Date.now(), title: 'Vote now', sub: 'Pick who to eject, or skip', tone: 'gold' })
+    } else if (phase === 'eject') play('whoosh')
   }, [phase, g])
 
   const seenEvents = useRef<Set<string> | null>(null)
@@ -319,7 +356,10 @@ export function GameScreen({ code }: { code: string }) {
     for (const e of events) {
       if (seenEvents.current.has(e.id)) continue
       seenEvents.current.add(e.id)
-      if (e.data.kind === 'lights') setBanner({ key: Date.now(), title: e.data.text.includes('went out') ? 'Lights out' : 'Lights are back', sub: e.data.text, tone: 'bad' })
+      if (e.data.kind === 'lights') {
+        if (e.data.text.includes('went out')) play('alarm')
+        setBanner({ key: Date.now(), title: e.data.text.includes('went out') ? 'Lights out' : 'Lights are back', sub: e.data.text, tone: 'bad' })
+      }
       if (e.data.kind === 'night') setBanner({ key: Date.now(), title: 'Night is coming', sub: e.data.text, tone: 'gold' })
     }
   }, [events])
@@ -332,6 +372,7 @@ export function GameScreen({ code }: { code: string }) {
       if (t.data.status !== 'broken' || seenBroken.current.has(`${t.id}:${t.data.doneAt}`)) continue
       seenBroken.current.add(`${t.id}:${t.data.doneAt}`)
       const lm = landmarkById(t.data.landmarkId)
+      play('crash')
       setBanner({ key: Date.now(), title: 'Your task was wrecked', sub: `Go back to the ${lm?.name ?? 'landmark'} and redo it`, tone: 'bad' })
     }
   }, [myTasks])
@@ -390,6 +431,7 @@ export function GameScreen({ code }: { code: string }) {
     const r = await act('game-build', { landmarkId: orderFor.id, text }, 'order')
     if (!r) return
     const done = (r.completed as string[] | undefined) ?? []
+    play('pop')
     flash(done.length ? `Task done. ${String(r.narration ?? '')}` : String(r.narration ?? 'Built.'), done.length > 0)
     setOrderFor(null)
   }
@@ -397,6 +439,7 @@ export function GameScreen({ code }: { code: string }) {
     if (!orderFor || busy) return
     const r = await act('game-wreck', { landmarkId: orderFor.id, kind: kind ?? 'knock', text: kind ? '' : wreckText.trim() }, 'wreck')
     if (!r) return
+    play('crash')
     flash(String(r.narration ?? 'Done.'), true)
     setOrderFor(null)
   }
@@ -475,7 +518,7 @@ export function GameScreen({ code }: { code: string }) {
   const impostorId = g?.reveal?.impostorPlayerId ?? ''
 
   return (
-    <div className="si">
+    <div className={`si phase-${phase}`}>
       <IslandView onReady={setScene} onMyMove={onMyMove} onFail={() => setWebglFailed(true)} />
       <div className="si-vignette" />
       <div ref={visionRef} className={`si-vision ${visionR === null ? 'off' : ''} ${visionR !== null && visionR < 3 ? 'dark' : ''}`} />
@@ -624,12 +667,34 @@ export function GameScreen({ code }: { code: string }) {
                   <div className="si-eyebrow si-tight">{phase === 'over' ? 'Game over' : phase === 'play' ? 'Night falls in' : 'Clock paused'}</div>
                   <div className={`si-timer ${nightLeft < 60_000 && phase === 'play' ? 'low' : ''}`}>{phase === 'over' ? '0:00' : fmtClock(nightLeft)}</div>
                 </div>
-                <SkyIcon size={30} className="si-sky" />
+                <div className="si-row">
+                  <SkyIcon size={30} className="si-sky" />
+                  <button
+                    className="si-icon-btn"
+                    aria-label={muted ? 'Turn sound on' : 'Mute'}
+                    onClick={() => {
+                      setMuted(!muted)
+                      setMutedState(!muted)
+                    }}
+                  >
+                    {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+                  </button>
+                </div>
               </div>
               <div className="si-skybar">
                 <i style={{ width: `${Math.round(elapsed * 100)}%` }} />
               </div>
             </div>
+            {(playing || phase === 'meeting' || phase === 'vote') && (
+              <div className="si-card si-map-card">
+                <MiniMap
+                  me={here}
+                  todo={new Set(isImpostor ? fakeList.map((id) => taskTemplate(id)?.landmarkId ?? '') : myTasks.filter((t) => t.data.status === 'todo').map((t) => t.data.landmarkId))}
+                  broken={new Set(myTasks.filter((t) => t.data.status === 'broken').map((t) => t.data.landmarkId))}
+                  lightsOut={lightsOut}
+                />
+              </div>
+            )}
             <div className="si-card si-players">
               <div className="si-eyebrow">Players</div>
               {players.map((p) => (

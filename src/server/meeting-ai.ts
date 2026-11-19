@@ -172,17 +172,18 @@ export function heuristicMeeting(input: MeetingInput, bots: MeetingPlayer[], not
   for (const bot of bots) {
     const n = notes.get(bot.id) as Notes
     if (bot.isImpostor) {
-      const t = n.suspect
-      lines.push({ playerId: bot.id, text: t ? `I passed the ${latest?.landmark ?? input.where} and ${nameOf(t)} was hanging around there. Just saying.` : 'I was busy with my tasks. Did anyone actually see anything?' })
+      // With no wreck to point at, the Impostor plays it safe and skips.
+      const t = latest ? n.suspect : null
+      lines.push({ playerId: bot.id, text: t && latest ? `I passed the ${latest.landmark} and ${nameOf(t)} was hanging around there. Just saying.` : 'I was busy with my tasks. Did anyone actually see anything?' })
       votes.push({ playerId: bot.id, targetId: t ?? 'skip' })
     } else if (n.sure && n.suspect) {
-      lines.push({ playerId: bot.id, text: `I saw ${nameOf(n.suspect)} at the ${latest?.landmark ?? 'spot'} right when it broke. It was them.` })
+      lines.push({ playerId: bot.id, text: `I saw ${nameOf(n.suspect)} at the ${latest?.landmark ?? 'landmark'} right when it broke. It was them.` })
       votes.push({ playerId: bot.id, targetId: n.suspect })
     } else if (witness && input.rng() < 0.65) {
       lines.push({ playerId: bot.id, text: `If ${nameOf(witness.b.id)} saw it, I believe them. Voting ${nameOf(witness.n.suspect as string)}.` })
       votes.push({ playerId: bot.id, targetId: witness.n.suspect as string })
     } else if (n.suspect && input.rng() < 0.5) {
-      lines.push({ playerId: bot.id, text: `${nameOf(n.suspect)} was near the ${latest?.landmark ?? 'spot'} too. Kind of sus.` })
+      lines.push({ playerId: bot.id, text: `${nameOf(n.suspect)} was near the ${latest?.landmark ?? 'landmark'} too. Kind of suspicious.` })
       votes.push({ playerId: bot.id, targetId: n.suspect })
     } else {
       lines.push({ playerId: bot.id, text: 'I did not see anything. I would rather skip than guess.' })

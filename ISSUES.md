@@ -10,6 +10,7 @@ Non blocking issues logged during the build. Fixed items move to the bottom with
 
 ## Open
 
+- If two browsers both think they should run the clock for a moment (for example right after the host's tab comes back to the front), two ticks can overlap. Votes are protected by a uniqueness rule, but a phase change could be logged twice. Presence settles the choice within a second.
 - Reporting a wreck or ringing the bell waits a few seconds for the AI players' meeting lines before the meeting opens.
 - Fonts come from Google Fonts. Where that is blocked, the page falls back to the system font.
 

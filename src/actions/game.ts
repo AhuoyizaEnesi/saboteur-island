@@ -340,6 +340,9 @@ async function setRoute(tools: ActionTools, gameId: string, playerId: string, le
 
 const WRECK_KINDS: WreckKind[] = ['knock', 'paint', 'remove']
 
+/** Share of the day an AI crew member spends per task before starting the next one. */
+const BOT_TASK_PACE = 0.2
+
 /**
  * Run every AI player for one tick: finish what they arrived to do, report
  * broken tasks they walk past, and plan the next walk. Returns true if an AI
@@ -433,12 +436,20 @@ async function runBots(env: Env, tools: ActionTools, game: Row<GameRow>, now: nu
       next = [walk, stayLeg({ x: walk.x1, z: walk.z1 }, walk.t1, 1500, 'work', 'lights')]
       goal = 'lights'
     } else if (role === 'crew') {
-      const mine = (await getTasks()).filter((t) => t.data.playerId === bot.id && t.data.status !== 'done')
+      const all = (await getTasks()).filter((t) => t.data.playerId === bot.id)
+      const mine = all.filter((t) => t.data.status !== 'done')
       const far = (t: Row<TaskRow>) => dist(landmarkById(t.data.landmarkId) as Landmark, here)
       mine.sort((a, b) => Number(b.data.status === 'broken') - Number(a.data.status === 'broken') || far(a) - far(b))
       const task = mine[0]
-      // Like real players, AI crew sometimes wander between tasks instead of beelining.
-      if (task && last?.doing === 'work' && rng() < 0.35) {
+      // Pace AI crew against the night clock so humans' tasks matter: the
+      // k-th task waits until about k fifths of the day have passed. Redoing a
+      // wrecked task never waits.
+      const k = all.length - mine.length
+      const elapsed = PLAY_MS - Math.max(0, game.data.nightAt - now)
+      const seat = players.find((p) => p.id === bot.id)?.data.seat ?? 0
+      const notYet = task && task.data.status !== 'broken' && elapsed < k * PLAY_MS * BOT_TASK_PACE + seat * 4_000
+      // Like real players, AI crew also wander between tasks instead of beelining.
+      if (task && (notYet || (last?.doing === 'work' && rng() < 0.35))) {
         const lm = LANDMARKS[1 + Math.floor(rng() * (LANDMARKS.length - 1))]
         const walk = walkLeg(here, standSpot(lm, rng, 2), now + 600, 'wander')
         next = [stayLeg(here, now, 600, 'wait'), walk, stayLeg({ x: walk.x1, z: walk.z1 }, walk.t1, 2000 + rng() * 3000, 'wait')]

@@ -98,7 +98,7 @@ The Impostor's builder can knock over, recolor and remove objects. The crew's bu
 
 ## 9. Vision and camera
 
-- The camera follows your islander from above and behind. The lobby and end screen use the orbit view.
+- The camera follows your islander from above and behind, in the lobby too. The role reveal and the end screen use the orbit view.
 - You see other islanders within your vision circle: crew 5 units, Impostor 6 units, crew with lights out 1.8 units. Ghosts see everything.
 - Builds, landmarks and smoke are always drawn, but everything outside your circle is darkened.
 - **Known limit:** vision is drawn in the browser. Positions sit in records every player can read, so someone inspecting the raw data could see more. We accept that for a party game and say so in the writeup.
@@ -146,9 +146,9 @@ These get tuned during testing.
 |---|---|
 | Landing | Headline of 3 to 8 words, the live 3D island as the hero, a Play button |
 | Menu | Create a game, or join with a 4 letter code |
-| Lobby | Orbit view, the code, an invite link, 6 seats, Start for the host. Players can walk while they wait |
+| Lobby | Follow view so players can walk while they wait. A side panel with the code, an invite link, 6 seats, and Start for the host |
 | Role reveal | Crew or Impostor in large type, with the goal in one line |
-| Play | Follow camera. Top left: task list and task bar. Top right: night clock. Bottom right: action buttons that light up in range (Build, Report, Wreck, Lights, Fix lights, Bell). Top center: alerts |
+| Play | Follow camera. Top left: task list and task bar. Top right: night clock, a small island map (your position and your task landmarks, never other players), and the player list. Bottom right: action buttons that light up in range (Build, Report, Fix lights, Bell). Top center: alerts |
 | Order box | Opens at a landmark. Text field filled with the task, a Build button. The Impostor sees the wreck buttons instead |
 | Meeting | Chat on one side, islanders seated around the bell, then the vote grid |
 | Ejection | Space background, the islander drifting away, the result typing out |
@@ -223,6 +223,7 @@ A floating island at dusk in deep space, turning to night as the clock runs down
 - **HUD:** dark glass panels with thin borders. Nothing covers the middle of the screen during play.
 - **Motion:** smooth camera moves and pop in builds. Everything checks `prefers-reduced-motion`.
 - **No emoji** anywhere in the interface. Icons come from lucide.
+- **Sound:** small synthesized effects (bell, task done, wreck, lights out, ejection), silent until the first click, with a mute button.
 
 ---
 

@@ -230,3 +230,15 @@ describe('roles, codes and scenery', () => {
     expect(overlaps).toBe(0)
   })
 })
+
+describe('meeting AI with no clues', () => {
+  it('the Impostor AI does not invent a sighting when nothing was wrecked', () => {
+    const players = [
+      { id: 'imp', name: 'Kai', isBot: true, alive: true, isImpostor: true },
+      { id: 'c', name: 'Ada', isBot: true, alive: true, isImpostor: false },
+    ]
+    const out = heuristicMeeting({ players, clues: [], callerName: 'Peace', reason: 'bell', where: 'the bell', rng: makeRng(1) }, players)
+    expect(out.votes.find((v) => v.playerId === 'imp')?.targetId).toBe('skip')
+    expect(out.lines.map((l) => l.text).join(' ')).not.toMatch(/the the/)
+  })
+})
