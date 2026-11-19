@@ -232,3 +232,7 @@
     touch-action: manipulation;
   }
 }
+
+/* Display face for the wordmark and headlines (Unbounded, loaded in index.html). */
+.font-display { font-family: Unbounded, Sora, system-ui, sans-serif; }
+body { font-family: Sora, system-ui, sans-serif; }

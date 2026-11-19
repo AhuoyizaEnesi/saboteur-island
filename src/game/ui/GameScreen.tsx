@@ -6,10 +6,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth, usePresenceRoom } from 'deepspace'
-import { callAction } from '../api'
-import { CHAT_MAX_CHARS, EJECT_MS, GOAL_TEXT, MIN_PLAYERS, ORDER_MAX_CHARS, ROUNDS, SEAT_COLORS } from '../constants'
-import type { BuildType } from '../catalog'
-import { secretStatus, taskProgress, taskStatus, themeById } from '../rules'
+import { Bell, Ghost, Hammer, Link as LinkIcon, Megaphone, Moon, Paintbrush, SendHorizontal, Sun, Sunset, Trash2, Undo2, Wrench, X, Zap } from 'lucide-react'
+import { callAction, serverNow } from '../api'
+import {
+  BELL_RANGE,
+  CHAT_MAX_CHARS,
+  CHECKPOINT_MS,
+  EJECT_MS,
+  MIN_PLAYERS,
+  ORDER_MAX_CHARS,
+  PLAY_MS,
+  PRESENCE_MS,
+  REPORT_RANGE,
+  SEAT_COLORS,
+  SHED_RANGE,
+  TASK_RANGE,
+  TICK_MS,
+  VISION,
+} from '../constants'
+import { LANDMARKS, landmarkById, type Landmark } from '../landmarks'
+import { taskTemplate } from '../tasks'
 import type { IslandScene } from '../scene/IslandScene'
 import { fmtClock, useGameData, useNow, type Rec } from '../useGame'
 import type { PlayerRow } from '../types'
@@ -17,48 +33,61 @@ import { IslandView } from './IslandView'
 import { IslanderIcon } from './IslanderIcon'
 import '../game.css'
 
-const CHIPS = ['Three cottages by the pond', 'A dock and a fishing boat', 'A lighthouse on the cliff', 'Lanterns along the paths', 'Make it rain']
+type Banner = { key: number; title: string; sub?: string; tone: 'crew' | 'bad' | 'gold' }
+type Pos = { x: number; z: number }
 
-type Banner = { key: number; title: string; sub?: string; color?: string }
+const dist = (a: Pos, b: Pos) => Math.hypot(a.x - b.x, a.z - b.z)
+const isTyping = (e: KeyboardEvent) => {
+  const t = e.target as HTMLElement | null
+  return Boolean(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable))
+}
 
 export function GameScreen({ code }: { code: string }) {
   const { userId } = useAuth()
   const navigate = useNavigate()
-  const { loading, game, players, secrets, builds, orders, chat, votes, events } = useGameData(code)
+  const { loading, game, players, secrets, tasks, builds, breaks, routes, chat, votes, events } = useGameData(code)
   const now = useNow()
   const [scene, setScene] = useState<IslandScene | null>(null)
   const [webglFailed, setWebglFailed] = useState(false)
   const [banner, setBanner] = useState<Banner | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ text: string; good?: boolean } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [orderFor, setOrderFor] = useState<Landmark | null>(null)
   const [orderText, setOrderText] = useState('')
+  const [wreckText, setWreckText] = useState('')
   const [chatText, setChatText] = useState('')
   const [hideOver, setHideOver] = useState(false)
   const [showOver, setShowOver] = useState(false)
+  const [here, setHere] = useState<Pos | null>(null)
 
   const gameId = game?.id ?? ''
   const g = game?.data
   const phase = g?.phase ?? 'lobby'
   const me = players.find((p) => p.data.userId === userId) ?? null
+  const meId = me?.id ?? ''
   const mySecret = me ? secrets.find((s) => s.data.playerId === me.id) ?? null : null
   const role = mySecret?.data.role ?? null
+  const isImpostor = role === 'impostor'
   const isHost = Boolean(g && userId && g.hostId === userId)
   const alive = Boolean(me?.data.alive)
+  const ghost = Boolean(me && !alive && phase !== 'lobby')
   const lightsOut = Boolean(g && g.lightsOutUntil > now)
   const presence = usePresenceRoom(`game:${gameId || 'pending'}`)
   const nameOf = useCallback((id: string) => players.find((p) => p.id === id)?.data.name ?? 'Someone', [players])
-  const colorOf = useCallback((id: string) => players.find((p) => p.id === id)?.data.color ?? '#7cf7ff', [players])
+  const colorOf = useCallback((id: string) => players.find((p) => p.id === id)?.data.color ?? SEAT_COLORS[0], [players])
 
-  const flash = useCallback((msg: string) => {
-    setToast(msg)
-    window.setTimeout(() => setToast((t) => (t === msg ? null : t)), 3200)
+  const flash = useCallback((text: string, good = false) => {
+    setToast({ text, good })
+    window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), 3400)
   }, [])
 
+  const myPos = useRef<Pos | null>(null)
   const act = useCallback(
     async (name: string, params: Record<string, unknown> = {}, label?: string) => {
       if (label) setBusy(label)
       try {
-        return await callAction(name, { gameId, ...params })
+        const p = myPos.current
+        return await callAction(name, { gameId, ...(p ? { x: p.x, z: p.z } : {}), ...params })
       } catch (e) {
         flash(e instanceof Error ? e.message : 'Something went wrong.')
         return null
@@ -78,6 +107,10 @@ export function GameScreen({ code }: { code: string }) {
   }, [game, me, userId, code, flash])
 
   // ─── drive the 3D scene from records ──────────────────────────────────────
+  useEffect(() => {
+    scene?.setClock(serverNow)
+  }, [scene])
+
   const buildsSynced = useRef(false)
   useEffect(() => {
     if (!scene) return
@@ -87,28 +120,48 @@ export function GameScreen({ code }: { code: string }) {
   }, [scene, builds])
 
   useEffect(() => {
+    scene?.setBreaks(breaks.filter((b) => !b.data.fixed).map((b) => ({ id: b.id, x: b.data.x, z: b.data.z })))
+  }, [scene, breaks])
+
+  useEffect(() => {
+    scene?.setRoutes(routes)
+  }, [scene, routes])
+
+  useEffect(() => {
     if (!scene) return
     scene.setPlayers(
-      players.map((p) => ({ id: p.id, name: p.data.name, color: p.data.color, alive: Boolean(p.data.alive) || (phase === 'eject' && g?.ejectedId === p.id), isMe: p.id === me?.id, seat: p.data.seat })),
+      players.map((p) => ({
+        id: p.id,
+        name: p.data.name,
+        color: p.data.color,
+        alive: Boolean(p.data.alive) || (phase === 'eject' && g?.ejectedId === p.id),
+        isMe: p.id === meId,
+        seat: p.data.seat,
+        wanders: false,
+        // Only ghosts can see ghosts.
+        ghost: !p.data.alive && ghost && phase !== 'eject',
+      })),
     )
-  }, [scene, players, me?.id, phase, g?.ejectedId])
+  }, [scene, players, meId, phase, g?.ejectedId, ghost])
 
   useEffect(() => {
-    if (scene && g) scene.setEnvironment(g.timeOfDay || 'day', g.weather || 'clear')
-  }, [scene, g?.timeOfDay, g?.weather, g])
+    if (scene && g) scene.setEnvironment(g.timeOfDay || 'day', 'clear')
+  }, [scene, g?.timeOfDay, g])
 
   useEffect(() => {
-    scene?.setLightsOut(lightsOut)
-  }, [scene, lightsOut])
+    scene?.setLightsOut(lightsOut && !isImpostor && !ghost)
+  }, [scene, lightsOut, isImpostor, ghost])
 
   useEffect(() => {
     scene?.setMeeting(phase === 'meeting' || phase === 'vote')
   }, [scene, phase])
 
-  const building = orders.some((o) => o.data.status === 'building')
+  // Vision: crew see 5 units, the Impostor 6, crew in a blackout 1.8. Ghosts see everything.
+  const visionRef = useRef<HTMLDivElement>(null)
+  const visionR = phase !== 'play' || !me || ghost ? null : isImpostor ? VISION.impostor : lightsOut ? VISION.lightsOut : VISION.crew
   useEffect(() => {
-    scene?.setAgentWorking(building ? '#7cf7ff' : null)
-  }, [scene, building])
+    scene?.setVision(visionR, visionRef.current)
+  }, [scene, visionR])
 
   const flown = useRef(false)
   useEffect(() => {
@@ -127,38 +180,88 @@ export function GameScreen({ code }: { code: string }) {
     window.setTimeout(() => scene.eject(g.ejectedId), 600)
   }, [scene, phase, g?.ejectedId, g?.meetingNo, g])
 
-  const revealed = useRef(false)
   useEffect(() => {
-    if (!scene || phase !== 'over' || !g?.reveal || revealed.current) return
-    revealed.current = true
-    const ids = g.reveal.sabotageBuildIds ?? []
-    window.setTimeout(() => scene.revealBuilds(ids), 1200)
-    window.setTimeout(() => setShowOver(true), ids.length ? 5200 : 1500)
-  }, [scene, phase, g?.reveal, g])
+    if (phase !== 'over') return
+    const id = window.setTimeout(() => setShowOver(true), 1500)
+    return () => window.clearTimeout(id)
+  }, [phase])
 
-  // ─── presence: walking, and who is online ─────────────────────────────────
+  // ─── walking: my islander, other humans over presence, checkpoints ───────
   const { peers, updateState } = presence
+  const canWalk = Boolean(me && (phase === 'lobby' || phase === 'play') && (alive || ghost))
+  const following = Boolean(me) && phase !== 'over' && phase !== 'intro'
+  useEffect(() => {
+    if (!scene) return
+    scene.setControlled(meId || null, canWalk && !orderFor)
+    scene.setCameraMode(following ? 'follow' : 'orbit')
+  }, [scene, meId, canWalk, following, orderFor])
+
   const lastPeerPos = useRef(new Map<string, string>())
   useEffect(() => {
     if (!scene) return
     for (const peer of peers) {
       const st = peer.state as { pid?: string; x?: number; z?: number }
-      if (!st.pid || typeof st.x !== 'number' || typeof st.z !== 'number') continue
+      if (!st.pid || st.pid === meId || typeof st.x !== 'number' || typeof st.z !== 'number') continue
       const key = `${st.x.toFixed(2)},${st.z.toFixed(2)}`
       if (lastPeerPos.current.get(st.pid) === key) continue
       lastPeerPos.current.set(st.pid, key)
       scene.walkTo(st.pid, st.x, st.z, true)
     }
-  }, [scene, peers])
+  }, [scene, peers, meId])
 
-  const onGroundClick = useCallback(
+  // Broadcast my position to other browsers about ten times a second.
+  const lastSent = useRef(0)
+  const pendingSend = useRef<number | null>(null)
+  const broadcast = useCallback(() => {
+    pendingSend.current = null
+    const p = myPos.current
+    if (!p || !meId) return
+    lastSent.current = performance.now()
+    updateState({ pid: meId, x: Math.round(p.x * 100) / 100, z: Math.round(p.z * 100) / 100 })
+  }, [meId, updateState])
+  const onMyMove = useCallback(
     (x: number, z: number) => {
-      if (!scene || !me || !alive || (phase !== 'build' && phase !== 'lobby' && phase !== 'intro')) return
-      scene.walkTo(me.id, x, z)
-      updateState({ pid: me.id, x, z })
+      myPos.current = { x, z }
+      if (pendingSend.current !== null) return
+      const wait = Math.max(0, PRESENCE_MS - (performance.now() - lastSent.current))
+      pendingSend.current = window.setTimeout(broadcast, wait)
     },
-    [scene, me, alive, phase, updateState],
+    [broadcast],
   )
+  useEffect(
+    () => () => {
+      if (pendingSend.current !== null) window.clearTimeout(pendingSend.current)
+    },
+    [],
+  )
+
+  // Keep my position fresh even when I stand still (meetings move everyone).
+  useEffect(() => {
+    if (!scene || !meId) return
+    const id = window.setInterval(() => {
+      const p = scene.getCharacterPos(meId)
+      if (!p) return
+      const prev = myPos.current
+      if (!prev || dist(prev, p) > 0.01) onMyMove(p.x, p.z)
+      setHere((h) => (h && dist(h, p) < 0.05 ? h : p))
+    }, 200)
+    return () => window.clearInterval(id)
+  }, [scene, meId, onMyMove])
+
+  // Checkpoints: the server cannot read presence, so it gets my position too.
+  const lastCheckpoint = useRef('')
+  useEffect(() => {
+    if (!gameId || !canWalk) return
+    const id = window.setInterval(() => {
+      const p = myPos.current
+      if (!p) return
+      const key = `${p.x.toFixed(2)},${p.z.toFixed(2)}`
+      if (key === lastCheckpoint.current) return
+      lastCheckpoint.current = key
+      callAction('game-pos', { gameId, x: p.x, z: p.z }).catch(() => undefined)
+    }, CHECKPOINT_MS)
+    return () => window.clearInterval(id)
+  }, [gameId, canWalk])
 
   // ─── the clock: one browser advances the game ─────────────────────────────
   const onlineUserIds = useMemo(() => new Set([...(userId ? [userId] : []), ...peers.map((p) => p.userId)]), [userId, peers])
@@ -180,7 +283,7 @@ export function GameScreen({ code }: { code: string }) {
         .finally(() => {
           inflight.current = false
         })
-    }, 2000)
+    }, TICK_MS)
     return () => window.clearInterval(id)
   }, [gameId, iTick, phase])
 
@@ -188,19 +291,22 @@ export function GameScreen({ code }: { code: string }) {
   const lastPhase = useRef<string>('')
   useEffect(() => {
     if (!g) return
-    const key = `${phase}:${g.round}:${g.meetingNo}`
+    const key = `${phase}:${g.meetingNo}`
     if (lastPhase.current === key) return
     const first = lastPhase.current === ''
     lastPhase.current = key
     if (first) return
-    if (phase === 'build' && g.ejectedId === '') {
-      const sub = g.round === 1 ? 'Give the agent your orders' : g.round === ROUNDS ? 'The last round. Night falls.' : 'The sun is going down'
-      setBanner({ key: Date.now(), title: `Round ${g.round}`, sub, color: '#7cf7ff' })
-    } else if (phase === 'meeting') {
-      setBanner({ key: Date.now(), title: g.finalMeeting ? 'Final vote' : 'Emergency meeting', sub: g.finalMeeting ? 'Last chance to catch the Impostor' : `Called by ${g.meetingCalledBy}`, color: '#ff4d6d' })
-    } else if (phase === 'vote') {
-      setBanner({ key: Date.now(), title: 'Vote now', sub: 'Pick who to eject, or skip', color: '#ffd166' })
-    }
+    if (phase === 'play' && g.meetingNo === 0) setBanner({ key: Date.now(), title: 'Fix up the island', sub: 'Night falls in 7 minutes', tone: 'crew' })
+    else if (phase === 'play') setBanner({ key: Date.now(), title: 'Back to work', sub: 'The night clock is running again', tone: 'crew' })
+    else if (phase === 'meeting') {
+      setOrderFor(null)
+      setBanner({
+        key: Date.now(),
+        title: g.meetingReason === 'report' ? 'Something was wrecked' : 'Emergency meeting',
+        sub: g.meetingReason === 'report' ? `${g.meetingCalledBy} found it at the ${g.meetingWhere}` : `${g.meetingCalledBy} rang the bell`,
+        tone: 'bad',
+      })
+    } else if (phase === 'vote') setBanner({ key: Date.now(), title: 'Vote now', sub: 'Pick who to eject, or skip', tone: 'gold' })
   }, [phase, g])
 
   const seenEvents = useRef<Set<string> | null>(null)
@@ -213,37 +319,127 @@ export function GameScreen({ code }: { code: string }) {
     for (const e of events) {
       if (seenEvents.current.has(e.id)) continue
       seenEvents.current.add(e.id)
-      if (e.data.kind === 'lights') setBanner({ key: Date.now(), title: e.data.text.includes('fixed') ? 'Lights are back' : 'Lights out!', sub: e.data.text, color: '#ff4d6d' })
+      if (e.data.kind === 'lights') setBanner({ key: Date.now(), title: e.data.text.includes('went out') ? 'Lights out' : 'Lights are back', sub: e.data.text, tone: 'bad' })
+      if (e.data.kind === 'night') setBanner({ key: Date.now(), title: 'Night is coming', sub: e.data.text, tone: 'gold' })
     }
   }, [events])
 
-  // ─── moves ────────────────────────────────────────────────────────────────
-  const sendOrder = async (text: string) => {
-    const t = text.trim()
-    if (!t || busy) return
-    setOrderText('')
-    if (me && scene) {
-      const pos = scene.getCharacterPos(me.id)
-      if (pos) updateState({ pid: me.id, x: pos.x, z: pos.z })
+  // A task of mine just broke: tell me (only the owner learns which one).
+  const myTasks = useMemo(() => (me ? tasks.filter((t) => t.data.playerId === me.id) : []), [tasks, me])
+  const seenBroken = useRef(new Set<string>())
+  useEffect(() => {
+    for (const t of myTasks) {
+      if (t.data.status !== 'broken' || seenBroken.current.has(`${t.id}:${t.data.doneAt}`)) continue
+      seenBroken.current.add(`${t.id}:${t.data.doneAt}`)
+      const lm = landmarkById(t.data.landmarkId)
+      setBanner({ key: Date.now(), title: 'Your task was wrecked', sub: `Go back to the ${lm?.name ?? 'landmark'} and redo it`, tone: 'bad' })
     }
-    await act('game-order', { text: t }, 'order')
+  }, [myTasks])
+
+  // ─── where am I, and what can I do here ───────────────────────────────────
+  const playing = phase === 'play'
+  const nearLandmark = useMemo(() => {
+    if (!here || !playing) return null
+    let best: Landmark | null = null
+    let bestD = Infinity
+    for (const l of LANDMARKS) {
+      if (!l.area) continue
+      const d = dist(l, here)
+      if (d <= TASK_RANGE && d < bestD) {
+        best = l
+        bestD = d
+      }
+    }
+    return best
+  }, [here, playing])
+  const nearBell = Boolean(here && playing && alive && dist(here, LANDMARKS[0]) <= BELL_RANGE)
+  const shed = landmarkById('power_shed') as Landmark
+  const nearShed = Boolean(here && playing && alive && dist(here, shed) <= SHED_RANGE)
+  const nearBreak = useMemo(() => {
+    if (!here || !playing || !alive) return null
+    return breaks.find((b) => !b.data.reported && !b.data.fixed && dist(b.data, here) <= REPORT_RANGE) ?? null
+  }, [here, playing, alive, breaks])
+  const canBuild = Boolean(nearLandmark && (alive || (ghost && !isImpostor)))
+
+  useEffect(() => {
+    if (!scene) return
+    if (orderFor) scene.setFocus({ x: orderFor.x, z: orderFor.z, r: 1.3 })
+    else if (nearLandmark && canBuild) scene.setFocus({ x: nearLandmark.x, z: nearLandmark.z, r: 1.3 })
+    else scene.setFocus(null)
+  }, [scene, nearLandmark, canBuild, orderFor])
+
+  // Leaving the landmark closes the order box.
+  useEffect(() => {
+    if (orderFor && (!nearLandmark || nearLandmark.id !== orderFor.id)) setOrderFor(null)
+  }, [nearLandmark, orderFor])
+
+  const openOrder = useCallback(
+    (l: Landmark) => {
+      const mine = myTasks.find((t) => t.data.landmarkId === l.id && t.data.status !== 'done')
+      setOrderText(mine ? taskTemplate(mine.data.templateId)?.order ?? '' : '')
+      setWreckText('')
+      setOrderFor(l)
+    },
+    [myTasks],
+  )
+
+  // ─── moves ────────────────────────────────────────────────────────────────
+  const sendOrder = async () => {
+    const text = orderText.trim()
+    if (!text || !orderFor || busy) return
+    const r = await act('game-build', { landmarkId: orderFor.id, text }, 'order')
+    if (!r) return
+    const done = (r.completed as string[] | undefined) ?? []
+    flash(done.length ? `Task done. ${String(r.narration ?? '')}` : String(r.narration ?? 'Built.'), done.length > 0)
+    setOrderFor(null)
   }
+  const sendWreck = async (kind: 'knock' | 'paint' | 'remove' | null) => {
+    if (!orderFor || busy) return
+    const r = await act('game-wreck', { landmarkId: orderFor.id, kind: kind ?? 'knock', text: kind ? '' : wreckText.trim() }, 'wreck')
+    if (!r) return
+    flash(String(r.narration ?? 'Done.'), true)
+    setOrderFor(null)
+  }
+  const report = () => act('game-report', {}, 'report')
+  const ringBell = () => act('game-bell', {}, 'bell')
+  const fixLights = () => act('game-fix-lights', {}, 'fix')
+  const cutLights = () => act('game-lights', {}, 'lights')
   const sendChat = async () => {
     const t = chatText.trim()
     if (!t) return
     setChatText('')
     await act('game-chat', { text: t })
   }
-  const callMeeting = () => {
-    if (phase === 'build' && alive && (me?.data.meetingsLeft ?? 0) > 0) act('game-meeting', {}, 'meeting')
-  }
+
+  // Keyboard: E opens the order box, R reports, Esc closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOrderFor(null)
+        return
+      }
+      if (isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return
+      const k = e.key.toLowerCase()
+      if (k === 'e' && nearLandmark && canBuild && !orderFor) {
+        e.preventDefault()
+        openOrder(nearLandmark)
+      } else if (k === 'r' && nearBreak) {
+        e.preventDefault()
+        report()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   // ─── derived view data ────────────────────────────────────────────────────
-  const buildData = useMemo(() => builds.map((b) => b.data), [builds])
-  const progress = taskProgress(buildData)
-  const tasks = taskStatus(buildData)
-  const theme = mySecret?.data.themeId ? themeById(mySecret.data.themeId) : null
-  const secretList = theme && me ? secretStatus(buildData, me.id, theme) : []
+  const nightLeft = g ? (playing ? g.nightAt - now : phase === 'meeting' || phase === 'vote' || phase === 'eject' ? g.playMsLeft : 0) : 0
+  const elapsed = 1 - Math.max(0, Math.min(1, nightLeft / PLAY_MS))
+  const SkyIcon = elapsed < 0.45 ? Sun : elapsed < 0.85 ? Sunset : Moon
+  const taskPct = g && g.tasksTotal ? Math.round((g.tasksDone / g.tasksTotal) * 100) : 0
+  const fakeList = isImpostor && Array.isArray(mySecret?.data.fakeTasks) ? (mySecret?.data.fakeTasks as string[]) : []
+  const wreckWait = mySecret ? Math.max(0, mySecret.data.wreckReadyAt - now) : 0
+  const lightsWait = mySecret ? Math.max(0, mySecret.data.lightsReadyAt - now) : 0
   const timeLeft = g ? g.phaseEndsAt - now : 0
   const meetingNo = g?.meetingNo ?? 0
   const visibleChat = chat.filter((c) => c.data.meetingNo === meetingNo && c.data.showAt <= now)
@@ -254,28 +450,20 @@ export function GameScreen({ code }: { code: string }) {
   useEffect(() => {
     chatEnd.current?.scrollIntoView({ block: 'end' })
   }, [visibleChat.length])
-
-  const feed = useMemo(() => {
-    const items: { at: number; key: string; kind: 'order' | 'sys' | 'bad'; text: string; narration?: string }[] = []
-    for (const o of orders) items.push({ at: o.data.at, key: o.id, kind: 'order', text: o.data.text, narration: o.data.status === 'building' ? 'Building...' : o.data.narration })
-    for (const e of events) items.push({ at: e.data.at, key: e.id, kind: e.data.kind === 'eject' || e.data.kind === 'lights' ? 'bad' : 'sys', text: e.data.text })
-    return items.sort((a, b) => a.at - b.at).slice(-60)
-  }, [orders, events])
-  const feedEnd = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    feedEnd.current?.scrollIntoView({ block: 'end' })
-  }, [feed.length])
+  const feed = events.slice(-6)
 
   // ─── render ───────────────────────────────────────────────────────────────
   if (!loading && !game) {
     return (
       <div className="si">
         <div className="si-overlay dim">
-          <div className="si-panel" style={{ textAlign: 'center' }}>
+          <div className="si-panel si-center">
             <h2>No game called {code}</h2>
             <p className="si-small">Check the code, or start a new game.</p>
-            <div className="si-row" style={{ justifyContent: 'center', marginTop: 16 }}>
-              <Link className="si-btn primary" to="/play">Back to the menu</Link>
+            <div className="si-row si-mt">
+              <Link className="si-btn primary" to="/play">
+                Back to the menu
+              </Link>
             </div>
           </div>
         </div>
@@ -285,15 +473,12 @@ export function GameScreen({ code }: { code: string }) {
 
   const ejected = g?.ejectedId ? players.find((p) => p.id === g.ejectedId) : null
   const impostorId = g?.reveal?.impostorPlayerId ?? ''
-  const revealTheme = g?.reveal ? themeById(g.reveal.themeId) : null
-  const sabotageTypes = g?.reveal
-    ? [...new Set(g.reveal.sabotageBuildIds.map((id) => builds.find((b) => b.id === id)?.data.type).filter(Boolean) as string[])]
-    : []
 
   return (
     <div className="si">
-      <IslandView onReady={setScene} onGroundClick={onGroundClick} onBellClick={callMeeting} onFail={() => setWebglFailed(true)} />
-      <div className={`si-vignette ${lightsOut ? 'dark' : ''}`} />
+      <IslandView onReady={setScene} onMyMove={onMyMove} onFail={() => setWebglFailed(true)} />
+      <div className="si-vignette" />
+      <div ref={visionRef} className={`si-vision ${visionR === null ? 'off' : ''} ${visionR !== null && visionR < 3 ? 'dark' : ''}`} />
       {webglFailed && (
         <div className="si-overlay dim">
           <div className="si-panel">
@@ -305,39 +490,41 @@ export function GameScreen({ code }: { code: string }) {
 
       {/* ── lobby ── */}
       {g && phase === 'lobby' && (
-        <div className="si-overlay dim">
+        <div className="si-lobby">
           <div className="si-panel">
             <div className="si-eyebrow">Game code</div>
-            <div className="si-row" style={{ justifyContent: 'space-between' }}>
+            <div className="si-row si-between">
               <div className="si-lobby-code">{g.code}</div>
               <button
                 className="si-btn"
                 onClick={() => {
                   navigator.clipboard?.writeText(`${window.location.origin}/g/${g.code}`).then(
-                    () => flash('Invite link copied.'),
+                    () => flash('Invite link copied.', true),
                     () => flash(`Share this link: ${window.location.origin}/g/${g.code}`),
                   )
                 }}
               >
-                Copy invite link
+                <LinkIcon size={15} /> Copy invite link
               </button>
             </div>
-            <p className="si-small" style={{ margin: '6px 0 16px' }}>
-              Friends join with this code. Empty seats fill with AI players when the host starts, so one person can play a full game.
+            <p className="si-small si-gap">
+              Friends join with this code. Empty seats fill with AI players when the host starts. Walk around while you wait: WASD, the arrow keys, or click the ground.
             </p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div className="si-seats">
               {[0, 1, 2, 3, 4, 5].map((seat) => {
                 const p = players.find((x) => x.data.seat === seat)
                 return (
                   <div key={seat} className={`si-seat ${p ? 'filled' : ''}`} style={{ ['--c' as string]: p?.data.color ?? SEAT_COLORS[seat] }}>
                     <span className="si-dot" />
-                    {p ? `${p.data.name}${p.id === me?.id ? ' (you)' : ''}${p.data.userId === g.hostId ? ' · host' : ''}` : seat < MIN_PLAYERS ? 'AI player' : 'Open seat'}
+                    {p ? `${p.data.name}${p.id === meId ? ' (you)' : ''}${p.data.userId === g.hostId ? ' · host' : ''}` : seat < MIN_PLAYERS ? 'AI player' : 'Open seat'}
                   </div>
                 )
               })}
             </div>
-            <div className="si-row" style={{ marginTop: 18, justifyContent: 'space-between' }}>
-              <Link className="si-btn" to="/play">Leave</Link>
+            <div className="si-row si-between si-mt">
+              <Link className="si-btn" to="/play">
+                Leave
+              </Link>
               {isHost ? (
                 <button className="si-btn primary big" disabled={busy === 'start'} onClick={() => act('game-start', {}, 'start')}>
                   {busy === 'start' ? 'Dealing roles...' : 'Start the game'}
@@ -354,19 +541,13 @@ export function GameScreen({ code }: { code: string }) {
       {g && phase === 'intro' && (
         <div className="si-overlay dim">
           <div>
-            <div className="si-eyebrow" style={{ fontSize: 12 }}>You are</div>
-            {role ? (
-              <div className="si-big" style={{ color: role === 'impostor' ? '#ff4d6d' : '#7cf7ff', textShadow: `0 0 40px ${role === 'impostor' ? 'rgba(255,77,109,.6)' : 'rgba(124,247,255,.5)'}` }}>
-                {role === 'impostor' ? 'THE IMPOSTOR' : 'CREW'}
-              </div>
-            ) : (
-              <div className="si-big" style={{ color: '#a9a3d6' }}>WATCHING</div>
-            )}
+            <div className="si-eyebrow si-eyebrow-lg">You are</div>
+            <div className={`si-big ${role === 'impostor' ? 'impostor' : role === 'crew' ? 'crew' : 'watch'}`}>{role === 'impostor' ? 'THE IMPOSTOR' : role === 'crew' ? 'CREW' : 'WATCHING'}</div>
             <div className="si-sub">
-              {role === 'impostor' && theme
-                ? `Secret goal: ${theme.goal} Phrase your orders so they sound harmless. You can also cut the lights once per round.`
+              {role === 'impostor'
+                ? 'Wreck finished tasks when nobody is looking, and cut the lights to hide. If the island is not finished by night, you win.'
                 : role === 'crew'
-                  ? `${GOAL_TEXT}. Watch who walks to every new build. One player is sneaking in things that do not belong.`
+                  ? 'Walk to your tasks and tell the builder what to make. Finish every task before night, or vote out the Impostor.'
                   : 'You joined after the game started, so you can watch but not play.'}
             </div>
           </div>
@@ -378,136 +559,201 @@ export function GameScreen({ code }: { code: string }) {
         <>
           <div className="si-hud-left">
             <div className="si-title si-brand">SABOTEUR ISLAND</div>
-            <div className="si-card">
-              <div className="si-row" style={{ justifyContent: 'space-between' }}>
-                <div>
-                  <div className="si-eyebrow" style={{ marginBottom: 2 }}>
-                    {phase === 'meeting' ? 'Meeting' : phase === 'vote' ? 'Voting' : phase === 'over' ? 'Game over' : `Round ${g.round} of ${ROUNDS}`}
-                  </div>
-                  <div className={`si-timer ${timeLeft < 10_000 && phase !== 'over' ? 'low' : ''}`}>{phase === 'over' ? '0:00' : fmtClock(timeLeft)}</div>
-                </div>
-                {me ? (
-                  <span className="si-pill">
-                    <span className="si-dot" style={{ ['--c' as string]: me.data.color }} />
-                    {alive ? 'Alive' : 'Ejected'}
-                  </span>
-                ) : (
-                  <span className="si-pill">Watching</span>
-                )}
+            <div className={`si-card si-tasks-card ${isImpostor ? 'si-imp' : ''}`}>
+              <div className="si-eyebrow">{isImpostor ? 'Fake tasks: pretend to do these' : ghost ? 'Your tasks (you are a ghost)' : 'Your tasks'}</div>
+              {isImpostor
+                ? fakeList.map((id) => {
+                    const t = taskTemplate(id)
+                    return t ? (
+                      <div key={id} className="si-task fake">
+                        <span className="box" />
+                        <span>
+                          {t.text}
+                          <em>{landmarkById(t.landmarkId)?.name}</em>
+                        </span>
+                      </div>
+                    ) : null
+                  })
+                : myTasks.map((task) => {
+                    const t = taskTemplate(task.data.templateId)
+                    if (!t) return null
+                    return (
+                      <div key={task.id} className={`si-task ${task.data.status}`}>
+                        <span className="box">{task.data.status === 'done' ? '✓' : task.data.status === 'broken' ? '!' : ''}</span>
+                        <span>
+                          {t.text}
+                          <em>{task.data.status === 'broken' ? `Wrecked at the ${landmarkById(t.landmarkId)?.name}` : landmarkById(t.landmarkId)?.name}</em>
+                        </span>
+                      </div>
+                    )
+                  })}
+              <div className="si-eyebrow si-mt-sm">Crew task bar</div>
+              <div className="si-progress">
+                <i style={{ width: `${taskPct}%` }} />
+              </div>
+              <div className="si-small">
+                {g.tasksDone} of {g.tasksTotal} tasks done
               </div>
             </div>
-            <div className="si-card si-tasks-card">
-              <div className="si-eyebrow">Crew tasks</div>
-              <div className="si-progress"><i style={{ width: `${Math.round(progress * 100)}%` }} /></div>
-              {tasks.map((t) => (
-                <div key={t.type} className={`si-task ${t.done ? 'done' : ''}`}>
-                  <span className="box">{t.done ? '✓' : ''}</span>
-                  {t.label} <span style={{ marginLeft: 'auto', color: 'var(--muted)' }}>{t.have}/{t.need}</span>
-                </div>
-              ))}
-            </div>
-            {role === 'impostor' && theme && (
+            {isImpostor && alive && playing && (
               <div className="si-card si-imp">
-                <div className="si-eyebrow">Your secret goal</div>
-                <div className="si-role impostor" style={{ fontSize: 16, marginBottom: 6 }}>{theme.title}</div>
-                {secretList.map((s) => (
-                  <div key={s.target} className={`si-task ${s.done ? 'done' : ''}`}>
-                    <span className="box" style={s.done ? { background: 'var(--red)', borderColor: 'var(--red)' } : undefined}>{s.done ? '✓' : ''}</span>
-                    {labelFor(s.target)}
-                  </div>
-                ))}
-                <button
-                  className="si-btn red wide"
-                  style={{ marginTop: 10 }}
-                  disabled={phase !== 'build' || lightsOut || (mySecret?.data.sabotagesUsed ?? 0) >= 1 || !alive}
-                  onClick={() => act('game-sabotage', {}, 'sabotage')}
-                >
-                  Cut the lights
+                <div className="si-eyebrow">Impostor tricks</div>
+                <div className="si-small">Wreck: {wreckWait > 0 ? `ready in ${Math.ceil(wreckWait / 1000)}s` : 'ready. Walk up to a finished task.'}</div>
+                <button className="si-btn red wide si-mt-sm" disabled={lightsWait > 0 || lightsOut || busy === 'lights'} onClick={cutLights}>
+                  <Zap size={15} /> {lightsWait > 0 ? `Cut the lights (${Math.ceil(lightsWait / 1000)}s)` : 'Cut the lights'}
                 </button>
               </div>
             )}
-            {role === 'crew' && (
-              <div className="si-card">
-                <div className="si-eyebrow">Your role</div>
-                <div className="si-role crew">Crew</div>
-                <div className="si-small">Watch who walks to each new build. Ring the bell if something does not belong.</div>
+            {feed.length > 0 && (
+              <div className="si-card si-feed-card">
+                <div className="si-feed">
+                  {feed.map((e) => (
+                    <div key={e.id} className={`si-entry sys ${e.data.kind === 'eject' || e.data.kind === 'lights' || e.data.kind === 'meeting' ? 'bad' : ''}`}>
+                      {e.data.text}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
 
           <div className="si-hud-right">
+            <div className="si-card">
+              <div className="si-row si-between">
+                <div>
+                  <div className="si-eyebrow si-tight">{phase === 'over' ? 'Game over' : phase === 'play' ? 'Night falls in' : 'Clock paused'}</div>
+                  <div className={`si-timer ${nightLeft < 60_000 && phase === 'play' ? 'low' : ''}`}>{phase === 'over' ? '0:00' : fmtClock(nightLeft)}</div>
+                </div>
+                <SkyIcon size={30} className="si-sky" />
+              </div>
+              <div className="si-skybar">
+                <i style={{ width: `${Math.round(elapsed * 100)}%` }} />
+              </div>
+            </div>
             <div className="si-card si-players">
               <div className="si-eyebrow">Players</div>
               {players.map((p) => (
-                <PlayerLine key={p.id} p={p} me={me?.id} impostorId={phase === 'over' ? impostorId : ''} voted={phase === 'vote' && votedIds.has(p.id)} />
+                <PlayerLine key={p.id} p={p} me={meId} impostorId={phase === 'over' ? impostorId : ''} voted={phase === 'vote' && votedIds.has(p.id)} />
               ))}
             </div>
-            {phase !== 'meeting' && phase !== 'vote' && (
-              <div className="si-card si-feed-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                <div className="si-eyebrow">Island feed</div>
-                <div className="si-feed">
-                  {feed.map((f) =>
-                    f.kind === 'order' ? (
-                      <div key={f.key} className="si-entry">
-                        <span className="q">"{f.text}"</span>
-                        {f.narration && <span className="n">{f.narration}</span>}
-                      </div>
-                    ) : (
-                      <div key={f.key} className={`si-entry sys ${f.kind === 'bad' ? 'bad' : ''}`}>{f.text}</div>
-                    ),
-                  )}
-                  <div ref={feedEnd} />
-                </div>
-              </div>
-            )}
           </div>
 
-          {phase === 'build' && me && alive && (
+          {playing && me && (alive || ghost) && !orderFor && (
             <div className="si-actions">
-              <button className="si-btn red" disabled={(me.data.meetingsLeft ?? 0) <= 0 || busy === 'meeting'} onClick={callMeeting}>
-                🔔 {busy === 'meeting' ? 'Calling...' : (me.data.meetingsLeft ?? 0) > 0 ? 'Emergency meeting' : 'Meeting used'}
-              </button>
-              {lightsOut && (
-                <button className="si-btn" onClick={() => act('game-fix-lights', {}, 'fix')}>
-                  💡 Fix the lights
+              {canBuild && (
+                <button className="si-btn primary" onClick={() => nearLandmark && openOrder(nearLandmark)}>
+                  <Hammer size={16} /> {isImpostor ? 'Use' : 'Build'} at the {nearLandmark?.name} <kbd>E</kbd>
+                </button>
+              )}
+              {nearBreak && (
+                <button className="si-btn red" disabled={busy === 'report'} onClick={report}>
+                  <Megaphone size={16} /> Report the wreck <kbd>R</kbd>
+                </button>
+              )}
+              {nearShed && lightsOut && (
+                <button className="si-btn" disabled={busy === 'fix'} onClick={fixLights}>
+                  <Wrench size={16} /> Fix the lights
+                </button>
+              )}
+              {nearBell && (
+                <button className="si-btn red" disabled={(me.data.bellsLeft ?? 0) <= 0 || busy === 'bell' || (g?.bellLockUntil ?? 0) > now} onClick={ringBell}>
+                  <Bell size={16} /> {(me.data.bellsLeft ?? 0) > 0 ? 'Ring the bell' : 'Bell already used'}
                 </button>
               )}
             </div>
           )}
 
-          {phase === 'build' && me && alive && (
-            <div className="si-command">
-              {busy === 'order' && (
-                <div className="si-status">
-                  <span className="si-dots"><i /><i /><i /></span>The agent is building your order
-                </div>
+          {playing && me && !orderFor && (
+            <div className="si-walkhint">
+              {ghost ? (
+                <>
+                  <Ghost size={13} /> You are a ghost. Finish your tasks to help the crew.
+                </>
+              ) : (
+                'WASD or click to walk. Walk up to a landmark to work there.'
               )}
-              <div className="si-chips">
-                {CHIPS.map((c) => (
-                  <button key={c} className="si-chip" disabled={!!busy || me.data.ordersLeft <= 0} onClick={() => sendOrder(c)}>{c}</button>
-                ))}
-              </div>
-              <form
-                className="si-bar"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  sendOrder(orderText)
-                }}
-              >
-                <input
-                  value={orderText}
-                  maxLength={ORDER_MAX_CHARS}
-                  onChange={(e) => setOrderText(e.target.value)}
-                  placeholder={me.data.ordersLeft > 0 ? `Tell the agent what to build (${me.data.ordersLeft} order${me.data.ordersLeft === 1 ? '' : 's'} left)` : 'No orders left this round'}
-                  disabled={me.data.ordersLeft <= 0 || busy === 'order'}
-                />
-                <button className="si-send" type="submit" disabled={!orderText.trim() || me.data.ordersLeft <= 0 || busy === 'order'} aria-label="Send order">➤</button>
-              </form>
             </div>
           )}
 
-          {lightsOut && phase === 'build' && (
-            <div className="si-lights">⚠ The lights are out. {fmtClock(g.lightsOutUntil - now)}</div>
+          {orderFor && playing && (
+            <div className="si-order">
+              <div className="si-card">
+                <div className="si-row si-between">
+                  <div>
+                    <div className="si-eyebrow si-tight">At the</div>
+                    <div className="si-role">{orderFor.name}</div>
+                  </div>
+                  <button className="si-icon-btn" aria-label="Close" onClick={() => setOrderFor(null)}>
+                    <X size={16} />
+                  </button>
+                </div>
+                {isImpostor && (
+                  <div className="si-wreck">
+                    <div className="si-eyebrow si-mt-sm">Wreck a finished task here {wreckWait > 0 ? `(ready in ${Math.ceil(wreckWait / 1000)}s)` : ''}</div>
+                    <div className="si-row">
+                      <button className="si-btn red" disabled={wreckWait > 0 || !!busy} onClick={() => sendWreck('knock')}>
+                        <Undo2 size={15} /> Knock over
+                      </button>
+                      <button className="si-btn red" disabled={wreckWait > 0 || !!busy} onClick={() => sendWreck('paint')}>
+                        <Paintbrush size={15} /> Paint black
+                      </button>
+                      <button className="si-btn red" disabled={wreckWait > 0 || !!busy} onClick={() => sendWreck('remove')}>
+                        <Trash2 size={15} /> Take away
+                      </button>
+                    </div>
+                    <form
+                      className="si-bar si-mt-sm"
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        if (wreckText.trim()) sendWreck(null)
+                      }}
+                    >
+                      <input value={wreckText} maxLength={ORDER_MAX_CHARS} onChange={(e) => setWreckText(e.target.value)} placeholder="Or say it: paint the bird green" />
+                      <button className="si-send red" type="submit" disabled={!wreckText.trim() || wreckWait > 0 || !!busy} aria-label="Wreck">
+                        <SendHorizontal size={18} />
+                      </button>
+                    </form>
+                    <div className="si-eyebrow si-mt">Or build something to look busy</div>
+                  </div>
+                )}
+                {busy === 'order' && (
+                  <div className="si-status">
+                    <span className="si-dots">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    The builder is working
+                  </div>
+                )}
+                <form
+                  className="si-bar si-mt-sm"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    sendOrder()
+                  }}
+                >
+                  <input
+                    autoFocus={!isImpostor}
+                    value={orderText}
+                    maxLength={ORDER_MAX_CHARS}
+                    onChange={(e) => setOrderText(e.target.value)}
+                    placeholder="Tell the builder what to make here"
+                    disabled={busy === 'order'}
+                  />
+                  <button className="si-send" type="submit" disabled={!orderText.trim() || !!busy} aria-label="Build">
+                    <SendHorizontal size={18} />
+                  </button>
+                </form>
+                <div className="si-small si-mt-sm">Esc to close. The builder follows your words exactly.</div>
+              </div>
+            </div>
+          )}
+
+          {lightsOut && playing && (
+            <div className="si-lights">
+              <Zap size={15} /> {isImpostor ? 'You cut the lights.' : 'The lights are out. Fix them at the Power Shed.'} {fmtClock(g.lightsOutUntil - now)}
+            </div>
           )}
         </>
       )}
@@ -515,64 +761,66 @@ export function GameScreen({ code }: { code: string }) {
       {/* ── meeting and vote ── */}
       {g && (phase === 'meeting' || phase === 'vote') && (
         <div className="si-meeting">
-          <div className="si-card" style={{ borderColor: 'rgba(255,77,109,.45)' }}>
-            <div className="si-row" style={{ justifyContent: 'space-between' }}>
+          <div className="si-card si-meeting-head">
+            <div className="si-row si-between">
               <div>
-                <div className="si-eyebrow" style={{ color: '#ff9fb2', marginBottom: 2 }}>{g.finalMeeting ? 'Final vote' : `Called by ${g.meetingCalledBy}`}</div>
-                <div className="si-role" style={{ fontSize: 18 }}>{phase === 'meeting' ? 'Discuss' : 'Vote'}</div>
+                <div className="si-eyebrow si-tight">{g.meetingReason === 'report' ? `Wrecked at the ${g.meetingWhere}` : `Called by ${g.meetingCalledBy}`}</div>
+                <div className="si-role">{phase === 'meeting' ? 'Discuss' : 'Vote'}</div>
               </div>
               <div className={`si-timer ${timeLeft < 10_000 ? 'low' : ''}`}>{fmtClock(timeLeft)}</div>
             </div>
           </div>
-          <div className="si-card" style={{ flex: 1 }}>
+          <div className="si-card si-grow">
             <div className="si-eyebrow">Chat</div>
             <div className="si-chat">
-              {visibleChat.length === 0 && <div className="si-small">Nobody has said anything yet. Who walked to the weird stuff?</div>}
+              {visibleChat.length === 0 && <div className="si-small">Nobody has spoken yet. Who was near the wreck?</div>}
               {visibleChat.map((c) => (
-                <div key={c.id} className={`si-msg ${c.data.playerId === me?.id ? 'mine' : ''}`} style={{ ['--c' as string]: colorOf(c.data.playerId) }}>
+                <div key={c.id} className={`si-msg ${c.data.playerId === meId ? 'mine' : ''}`} style={{ ['--c' as string]: colorOf(c.data.playerId) }}>
                   <span className="av" />
-                  <div className="b"><b>{nameOf(c.data.playerId)}</b>{c.data.text}</div>
+                  <div className="b">
+                    <b>{nameOf(c.data.playerId)}</b>
+                    {c.data.text}
+                  </div>
                 </div>
               ))}
               <div ref={chatEnd} />
             </div>
             {me && alive && (
               <form
-                className="si-bar"
-                style={{ marginTop: 10, borderRadius: 14 }}
+                className="si-bar si-mt-sm"
                 onSubmit={(e) => {
                   e.preventDefault()
                   sendChat()
                 }}
               >
                 <input value={chatText} maxLength={CHAT_MAX_CHARS} onChange={(e) => setChatText(e.target.value)} placeholder="Say something. Name someone to ask them." />
-                <button className="si-send" type="submit" disabled={!chatText.trim()} aria-label="Send message">➤</button>
+                <button className="si-send" type="submit" disabled={!chatText.trim()} aria-label="Send message">
+                  <SendHorizontal size={18} />
+                </button>
               </form>
             )}
+            {ghost && <div className="si-small si-mt-sm">Ghosts cannot talk or vote.</div>}
           </div>
           {phase === 'vote' && (
             <div className="si-card">
               <div className="si-eyebrow">{myVote ? 'You voted' : me && alive ? 'Who is the Impostor?' : 'Votes'}</div>
               <div className="si-votes">
-                {players.map((p) => (
-                  <button
-                    key={p.id}
-                    className={`si-vote ${myVote?.data.targetId === p.id ? 'picked' : ''} ${p.data.alive ? '' : 'dead'}`}
-                    style={{ ['--c' as string]: p.data.color }}
-                    disabled={!me || !alive || Boolean(myVote) || !p.data.alive || p.id === me?.id}
-                    onClick={() => act('game-vote', { targetId: p.id })}
-                  >
-                    <span className="si-dot" />
-                    {p.data.name}
-                    {votedIds.has(p.id) && <span className="voted">voted</span>}
-                  </button>
-                ))}
-                <button
-                  className={`si-vote ${myVote?.data.targetId === 'skip' ? 'picked' : ''}`}
-                  style={{ ['--c' as string]: '#a9a3d6' }}
-                  disabled={!me || !alive || Boolean(myVote)}
-                  onClick={() => act('game-vote', { targetId: 'skip' })}
-                >
+                {players
+                  .filter((p) => p.data.alive)
+                  .map((p) => (
+                    <button
+                      key={p.id}
+                      className={`si-vote ${myVote?.data.targetId === p.id ? 'picked' : ''}`}
+                      style={{ ['--c' as string]: p.data.color }}
+                      disabled={!me || !alive || Boolean(myVote) || p.id === meId}
+                      onClick={() => act('game-vote', { targetId: p.id })}
+                    >
+                      <span className="si-dot" />
+                      {p.data.name}
+                      {votedIds.has(p.id) && <span className="voted">voted</span>}
+                    </button>
+                  ))}
+                <button className={`si-vote skip ${myVote?.data.targetId === 'skip' ? 'picked' : ''}`} disabled={!me || !alive || Boolean(myVote)} onClick={() => act('game-vote', { targetId: 'skip' })}>
                   Skip vote
                 </button>
               </div>
@@ -582,38 +830,37 @@ export function GameScreen({ code }: { code: string }) {
       )}
 
       {/* ── ejection ── */}
-      {g && phase === 'eject' && <Ejection key={`${g.meetingNo}`} name={ejected?.data.name ?? ''} color={ejected?.data.color ?? '#a9a3d6'} wasImpostor={Boolean(g.ejectedWasImpostor)} />}
+      {g && phase === 'eject' && <Ejection key={`${g.meetingNo}`} name={ejected?.data.name ?? ''} color={ejected?.data.color ?? SEAT_COLORS[0]} wasImpostor={Boolean(g.ejectedWasImpostor)} />}
 
       {/* ── game over ── */}
       {g && phase === 'over' && showOver && !hideOver && (
         <div className="si-overlay dim">
           <div className="si-panel">
-            <div className="si-eyebrow" style={{ color: g.winner === 'crew' ? '#5dff9b' : '#ff4d6d' }}>{g.winner === 'crew' ? 'Crew wins' : 'Impostor wins'}</div>
-            <h2>
-              {role ? ((g.winner === 'crew') === (role === 'crew') ? 'You won' : 'You lost') : g.winner === 'crew' ? 'The crew won' : 'The Impostor won'}
-            </h2>
+            <div className={`si-eyebrow ${g.winner === 'crew' ? 'good' : 'bad'}`}>{g.winner === 'crew' ? 'Crew wins' : 'Impostor wins'}</div>
+            <h2>{role ? ((g.winner === 'crew') === (role === 'crew') ? 'You won' : 'You lost') : g.winner === 'crew' ? 'The crew won' : 'The Impostor won'}</h2>
             <p className="si-small">{g.winReason}</p>
-            <div className="si-card si-imp" style={{ marginTop: 14 }}>
+            <div className="si-card si-imp si-mt">
               <div className="si-eyebrow">The Impostor was</div>
               <div className="si-row">
                 <IslanderIcon color={colorOf(impostorId)} size={44} />
-                <div className="si-role impostor" style={{ fontSize: 22 }}>{impostorId === me?.id ? 'You' : nameOf(impostorId)}</div>
+                <div className="si-role impostor">{impostorId === meId ? 'You' : nameOf(impostorId)}</div>
               </div>
-              {revealTheme && (
-                <>
-                  <div className="si-small" style={{ marginTop: 10 }}>Secret goal: {revealTheme.goal}</div>
-                  <ul style={{ margin: '8px 0 0 18px', fontSize: 13, color: '#ffd6de', lineHeight: 1.7 }}>
-                    {sabotageTypes.length ? sabotageTypes.map((t) => <li key={t}>{revealTheme.reveals[t as BuildType] ?? t}</li>) : <li>They never got anything onto the island.</li>}
-                  </ul>
-                </>
-              )}
+              <div className="si-small si-mt-sm">
+                {g.reveal?.wrecks ? `They wrecked ${g.reveal.wrecks} finished ${g.reveal.wrecks === 1 ? 'task' : 'tasks'}.` : 'They never wrecked a finished task.'} The crew finished {g.tasksDone} of {g.tasksTotal} tasks.
+              </div>
             </div>
-            <div className="si-row" style={{ marginTop: 18, justifyContent: 'space-between' }}>
-              <button className="si-btn" onClick={() => setHideOver(true)}>Look around</button>
+            <div className="si-row si-between si-mt">
+              <button className="si-btn" onClick={() => setHideOver(true)}>
+                Look around
+              </button>
               <div className="si-row">
-                <Link className="si-btn" to="/play">Menu</Link>
+                <Link className="si-btn" to="/play">
+                  Menu
+                </Link>
                 {g.nextCode ? (
-                  <button className="si-btn primary" onClick={() => navigate(`/g/${g.nextCode}`)}>Join the rematch</button>
+                  <button className="si-btn primary" onClick={() => navigate(`/g/${g.nextCode}`)}>
+                    Join the rematch
+                  </button>
                 ) : me ? (
                   <button
                     className="si-btn primary"
@@ -633,27 +880,28 @@ export function GameScreen({ code }: { code: string }) {
       )}
       {g && phase === 'over' && hideOver && (
         <div className="si-actions">
-          <button className="si-btn primary" onClick={() => setHideOver(false)}>Show results</button>
+          <button className="si-btn primary" onClick={() => setHideOver(false)}>
+            Show results
+          </button>
         </div>
       )}
 
       {banner && (
-        <div className="si-banner" key={banner.key} style={{ ['--c' as string]: banner.color }}>
+        <div className={`si-banner ${banner.tone}`} key={banner.key}>
           <div className="t">
             {banner.title}
             {banner.sub && <small>{banner.sub}</small>}
           </div>
         </div>
       )}
-      {toast && <div className="si-toast">{toast}</div>}
-      {loading && <div className="si-overlay"><span className="si-pill">Loading the island...</span></div>}
+      {toast && <div className={`si-toast ${toast.good ? 'good' : ''}`}>{toast.text}</div>}
+      {loading && (
+        <div className="si-overlay">
+          <span className="si-pill">Loading the island...</span>
+        </div>
+      )}
     </div>
   )
-}
-
-function labelFor(type: string) {
-  const t = type.replace('_', ' ')
-  return t.charAt(0).toUpperCase() + t.slice(1)
 }
 
 function PlayerLine({ p, me, impostorId, voted }: { p: Rec<PlayerRow>; me?: string; impostorId: string; voted: boolean }) {
@@ -662,25 +910,29 @@ function PlayerLine({ p, me, impostorId, voted }: { p: Rec<PlayerRow>; me?: stri
     <div className={`p ${p.data.alive ? '' : 'out'}`}>
       <span className="si-dot" style={{ ['--c' as string]: p.data.color }} />
       <span className="nm">{p.data.name}</span>
-      {voted && <span className="tag" style={{ color: '#5dff9b' }}>voted</span>}
-      {tag && <span className="tag" style={p.id === impostorId ? { color: '#ff4d6d', borderColor: 'rgba(255,77,109,.5)' } : undefined}>{tag}</span>}
+      {voted && <span className="tag good">voted</span>}
+      {tag && <span className={`tag ${p.id === impostorId ? 'bad' : ''}`}>{tag}</span>}
     </div>
   )
 }
 
 function Ejection({ name, color, wasImpostor }: { name: string; color: string; wasImpostor: boolean }) {
-  const full = name ? `${name} was ${wasImpostor ? 'the Impostor.' : 'crew.'}` : 'Nobody was ejected.'
+  const full = name ? `${name} was ${wasImpostor ? 'the Impostor.' : 'not the Impostor.'}` : 'Nobody was ejected.'
   const [shown, setShown] = useState('')
   useEffect(() => {
     let i = 0
+    let id = 0
     const start = window.setTimeout(() => {
-      const id = window.setInterval(() => {
+      id = window.setInterval(() => {
         i++
         setShown(full.slice(0, i))
         if (i >= full.length) window.clearInterval(id)
       }, 70)
     }, 1600)
-    return () => window.clearTimeout(start)
+    return () => {
+      window.clearTimeout(start)
+      window.clearInterval(id)
+    }
   }, [full])
   return (
     <div className="si-eject" style={{ animation: `si-in .5s ease both, si-fade-out .6s ease ${EJECT_MS / 1000 - 0.7}s both` }}>

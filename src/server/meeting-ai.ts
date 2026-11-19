@@ -1,25 +1,19 @@
 /**
  * What AI players say and how they vote in a meeting.
  *
- * One model call per meeting writes every AI player's chat lines and votes.
- * Crew AI players reason from public evidence only: who walked to which
- * build, and whether it fits a fishing village. The AI Impostor knows its
- * own secret and tries to deflect. If the model is unavailable, a simple
- * suspicion score drives the same output, so meetings always happen.
+ * Every wreck leaves a private clue on the server: who was near the spot, and
+ * which AI players could actually see the Impostor do it. Each AI player only
+ * knows its own clues. One model call per meeting turns those notes into chat
+ * lines and votes; the AI Impostor knows what it did and blames someone who
+ * was nearby. If the model is unavailable, the same notes drive simple rules,
+ * so meetings always happen.
  */
 
 import { generateText } from 'ai'
 import { createDeepSpaceAI } from 'deepspace/worker'
-import { GOAL_TEXT } from '../game/constants'
 import type { Rng } from '../game/placement'
-import type { Theme } from '../game/rules'
 import type { Env } from '../../worker'
 import { AGENT_MODEL } from './builder-agent'
-
-const VILLAGE_TYPES = new Set([
-  'house', 'dock', 'boat', 'lighthouse', 'lantern', 'windmill', 'well', 'fence',
-  'flowers', 'tent', 'campfire', 'sheep', 'pine_tree', 'round_tree', 'rock',
-])
 
 export interface MeetingPlayer {
   id: string
@@ -29,14 +23,22 @@ export interface MeetingPlayer {
   isImpostor: boolean
 }
 
+export interface Clue {
+  landmark: string
+  at: number
+  impostorId: string
+  /** Everyone within sight of the spot, the Impostor first. */
+  nearby: string[]
+  /** AI players who saw the Impostor do it. */
+  witnesses: string[]
+}
+
 export interface MeetingInput {
   players: MeetingPlayer[]
-  builds: { type: string; playerId: string; round: number }[]
-  orders: { playerId: string; text: string; round: number }[]
-  calledByName: string
-  final: boolean
-  theme: Theme
-  humanChat: { name: string; text: string }[]
+  clues: Clue[]
+  callerName: string
+  reason: 'bell' | 'report'
+  where: string
   rng: Rng
 }
 
@@ -46,60 +48,93 @@ export interface MeetingOutput {
   usedModel: boolean
 }
 
+/** What one AI player knows, in plain words, and who it suspects. */
+export interface Notes {
+  lines: string[]
+  /** Player id this AI player would vote for, or null to skip. */
+  suspect: string | null
+  /** True when the suspicion comes from seeing it happen. */
+  sure: boolean
+}
+
+export function notesFor(bot: MeetingPlayer, input: MeetingInput): Notes {
+  const nameOf = (id: string) => input.players.find((p) => p.id === id)?.name ?? 'someone'
+  const alive = new Set(input.players.filter((p) => p.alive).map((p) => p.id))
+  const clues = [...input.clues].sort((a, b) => b.at - a.at)
+  if (bot.isImpostor) {
+    // The Impostor blames whoever else was near its latest wreck.
+    const last = clues[0]
+    const pool = (last?.nearby ?? []).filter((id) => id !== bot.id && alive.has(id))
+    const fallback = input.players.filter((p) => p.alive && p.id !== bot.id)
+    const target = pool.length ? pool[Math.floor(input.rng() * pool.length)] : fallback[Math.floor(input.rng() * fallback.length)]?.id ?? null
+    return {
+      lines: last ? [`You wrecked the ${last.landmark}. ${target ? `${nameOf(target)} was nearby, so blame them.` : ''}`] : ['You have not wrecked anything yet.'],
+      suspect: target,
+      sure: false,
+    }
+  }
+  const lines: string[] = []
+  let suspect: string | null = null
+  let sure = false
+  for (const c of clues) {
+    if (c.witnesses.includes(bot.id) && alive.has(c.impostorId)) {
+      lines.push(`You saw ${nameOf(c.impostorId)} right at the ${c.landmark} when it got wrecked.`)
+      if (!sure) {
+        suspect = c.impostorId
+        sure = true
+      }
+    } else if (c.nearby.includes(bot.id)) {
+      const others = c.nearby.filter((id) => id !== bot.id && alive.has(id))
+      if (others.length) {
+        lines.push(`You were near the ${c.landmark} when it got wrecked. Also nearby: ${others.map(nameOf).join(', ')}.`)
+        if (!suspect) suspect = others[Math.floor(input.rng() * others.length)]
+      }
+    }
+  }
+  if (!lines.length) lines.push('You did not see anything suspicious.')
+  return { lines: lines.slice(0, 3), suspect, sure }
+}
+
 export async function planMeeting(env: Env, input: MeetingInput): Promise<MeetingOutput> {
   const bots = input.players.filter((p) => p.isBot && p.alive)
   if (!bots.length) return { lines: [], votes: [], usedModel: false }
+  const notes = new Map(bots.map((b) => [b.id, notesFor(b, input)]))
   try {
-    const out = await modelMeeting(env, input, bots)
+    const out = await modelMeeting(env, input, bots, notes)
     if (out) return out
   } catch (err) {
-    console.warn('[meeting-ai] model unavailable, using suspicion score:', err instanceof Error ? err.message : err)
+    console.warn('[meeting-ai] model unavailable, using notes:', err instanceof Error ? err.message : err)
   }
-  return heuristicMeeting(input, bots)
+  return heuristicMeeting(input, bots, notes)
 }
 
-function evidence(input: MeetingInput): string {
-  const nameOf = (id: string) => input.players.find((p) => p.id === id)?.name ?? 'someone'
-  const builtLines = input.builds.map((b) => `round ${b.round}: ${nameOf(b.playerId)} walked to a new ${b.type.replace('_', ' ')}`)
-  const orderLines = input.orders.map((o) => `round ${o.round}: an order said "${o.text}"`)
-  return [...builtLines.slice(-40), ...orderLines.slice(-20)].join('\n')
-}
-
-async function modelMeeting(env: Env, input: MeetingInput, bots: MeetingPlayer[]): Promise<MeetingOutput | null> {
+async function modelMeeting(env: Env, input: MeetingInput, bots: MeetingPlayer[], notes: Map<string, Notes>): Promise<MeetingOutput | null> {
   const anthropic = createDeepSpaceAI(env, 'anthropic')
   const alive = input.players.filter((p) => p.alive)
   const roster = alive.map((p) => `${p.name}${p.isBot ? '' : ' (human)'}`).join(', ')
-  const botBriefs = bots
-    .map((b) =>
-      b.isImpostor
-        ? `${b.name}: secretly the Impostor. Their hidden plan: ${input.theme.goal} Deflect suspicion, sound helpful, and vote for someone else. Never admit it.`
-        : `${b.name}: crew. Suspect whoever walked to builds that do not belong in a fishing village. Be specific about what they saw.`,
-    )
+  const briefs = bots
+    .map((b) => {
+      const n = notes.get(b.id) as Notes
+      const role = b.isImpostor ? 'secretly the Impostor. Never admit it. Sound helpful and push suspicion onto someone else.' : 'crew. Only accuse based on your notes. If your notes are empty, say so and lean toward skipping.'
+      return `${b.name}: ${role}\n  Notes: ${n.lines.join(' ')}`
+    })
     .join('\n')
-
   const result = await generateText({
     model: anthropic(AGENT_MODEL),
     system: [
-      'You write dialogue for AI players in Saboteur Island, a social deduction game.',
-      `The crew is building: ${GOAL_TEXT}. One player is a secret Impostor sneaking in things that do not belong.`,
-      'Players watch who walks to each new build, so who built what is public.',
-      'Write short, casual chat lines, like friends arguing over a game. Under 18 words each. No emojis, no dashes.',
-      'Reply with JSON only, matching: {"lines":[{"name":"","text":""}],"votes":[{"name":"","vote":""}]}',
-      'Each AI player writes 1 or 2 lines. vote is a living player name or "skip". Nobody votes for themselves.',
+      'You write chat for AI players in Saboteur Island, a party game like a cozy social deduction game.',
+      'Crew fix up a floating island before night. One secret Impostor wrecks finished work when nobody is looking.',
+      'Write short, casual lines, like friends arguing over a game. Under 18 words each. No emojis, no dashes.',
+      'Reply with JSON only: {"lines":[{"name":"","text":""}],"votes":[{"name":"","vote":""}]}',
+      'Each AI player writes 1 or 2 lines. A crew player who saw it happen should say so clearly. vote is a living player name or "skip". Nobody votes for themselves.',
     ].join('\n'),
     prompt: [
       `Living players: ${roster}.`,
-      `${input.calledByName} ${input.final ? 'is leading the final vote after the last round' : 'called this emergency meeting'}.`,
-      'AI players:',
-      botBriefs,
-      '',
-      'What everyone saw:',
-      evidence(input) || 'Nothing has been built yet.',
-      '',
-      input.humanChat.length ? `Chat so far:\n${input.humanChat.map((c) => `${c.name}: ${c.text}`).join('\n')}` : 'Nobody has spoken yet.',
+      input.reason === 'report' ? `${input.callerName} found something wrecked at the ${input.where} and called this meeting.` : `${input.callerName} rang the bell.`,
+      'AI players and what each one privately knows:',
+      briefs,
     ].join('\n'),
   })
-
   const raw = String(result.text || '')
   const start = raw.indexOf('{')
   const end = raw.lastIndexOf('}')
@@ -108,9 +143,7 @@ async function modelMeeting(env: Env, input: MeetingInput, bots: MeetingPlayer[]
     lines?: { name?: string; text?: string }[]
     votes?: { name?: string; vote?: string }[]
   }
-  const byName = (n: unknown) =>
-    typeof n === 'string' ? input.players.find((p) => p.name.toLowerCase() === n.trim().toLowerCase()) : undefined
-
+  const byName = (n: unknown) => (typeof n === 'string' ? input.players.find((p) => p.name.toLowerCase() === n.trim().toLowerCase()) : undefined)
   const lines: MeetingOutput['lines'] = []
   for (const l of parsed.lines ?? []) {
     const p = byName(l.name)
@@ -119,57 +152,42 @@ async function modelMeeting(env: Env, input: MeetingInput, bots: MeetingPlayer[]
   }
   const votes: MeetingOutput['votes'] = []
   for (const bot of bots) {
+    const n = notes.get(bot.id) as Notes
     const v = (parsed.votes ?? []).find((x) => byName(x.name)?.id === bot.id)
     const target = v && typeof v.vote === 'string' && v.vote.toLowerCase() === 'skip' ? null : byName(v?.vote)
-    const ok = target && target.alive && target.id !== bot.id
-    votes.push({ playerId: bot.id, targetId: ok ? target.id : 'skip' })
+    // An eyewitness never lets the model talk them out of their vote.
+    if (n.sure && n.suspect) votes.push({ playerId: bot.id, targetId: n.suspect })
+    else votes.push({ playerId: bot.id, targetId: target && target.alive && target.id !== bot.id ? target.id : 'skip' })
   }
   if (!lines.length) return null
-  return { lines, votes, usedModel: true }
+  return { lines: lines.slice(0, 10), votes, usedModel: true }
 }
 
-/** Suspicion = builds by a player that do not belong in a fishing village. */
-export function suspicionScores(input: Pick<MeetingInput, 'players' | 'builds'>): Record<string, number> {
-  const scores: Record<string, number> = {}
-  for (const p of input.players) scores[p.id] = 0
-  for (const b of input.builds) {
-    if (!VILLAGE_TYPES.has(b.type) && scores[b.playerId] !== undefined) scores[b.playerId] += 1
-  }
-  return scores
-}
-
-export function heuristicMeeting(input: MeetingInput, bots: MeetingPlayer[]): MeetingOutput {
-  const scores = suspicionScores(input)
-  const alive = input.players.filter((p) => p.alive)
+export function heuristicMeeting(input: MeetingInput, bots: MeetingPlayer[], notes = new Map(bots.map((b) => [b.id, notesFor(b, input)]))): MeetingOutput {
   const nameOf = (id: string) => input.players.find((p) => p.id === id)?.name ?? 'someone'
-  const oddBuildOf = (id: string) => input.builds.filter((b) => b.playerId === id && !VILLAGE_TYPES.has(b.type)).pop()
   const lines: MeetingOutput['lines'] = []
   const votes: MeetingOutput['votes'] = []
-
+  const witness = bots.map((b) => ({ b, n: notes.get(b.id) as Notes })).find((x) => !x.b.isImpostor && x.n.sure && x.n.suspect)
+  const latest = [...input.clues].sort((a, b) => b.at - a.at)[0]
   for (const bot of bots) {
-    const others = alive.filter((p) => p.id !== bot.id)
-    const ranked = [...others].sort((a, b) => (scores[b.id] ?? 0) - (scores[a.id] ?? 0))
-    let target = ranked[0] && (scores[ranked[0].id] ?? 0) > 0 ? ranked[0] : null
+    const n = notes.get(bot.id) as Notes
     if (bot.isImpostor) {
-      const crew = others.filter((p) => !p.isImpostor)
-      target = crew.length ? crew[Math.floor(input.rng() * crew.length)] : null
-    }
-    if (target) {
-      const odd = oddBuildOf(target.id)
-      const text = odd
-        ? `I watched ${target.name} walk straight to that ${odd.type.replace('_', ' ')}. That is not village stuff.`
-        : `${target.name} has been quiet all game. That feels off to me.`
-      lines.push({ playerId: bot.id, text })
-      votes.push({ playerId: bot.id, targetId: target.id })
+      const t = n.suspect
+      lines.push({ playerId: bot.id, text: t ? `I passed the ${latest?.landmark ?? input.where} and ${nameOf(t)} was hanging around there. Just saying.` : 'I was busy with my tasks. Did anyone actually see anything?' })
+      votes.push({ playerId: bot.id, targetId: t ?? 'skip' })
+    } else if (n.sure && n.suspect) {
+      lines.push({ playerId: bot.id, text: `I saw ${nameOf(n.suspect)} at the ${latest?.landmark ?? 'spot'} right when it broke. It was them.` })
+      votes.push({ playerId: bot.id, targetId: n.suspect })
+    } else if (witness && input.rng() < 0.65) {
+      lines.push({ playerId: bot.id, text: `If ${nameOf(witness.b.id)} saw it, I believe them. Voting ${nameOf(witness.n.suspect as string)}.` })
+      votes.push({ playerId: bot.id, targetId: witness.n.suspect as string })
+    } else if (n.suspect && input.rng() < 0.5) {
+      lines.push({ playerId: bot.id, text: `${nameOf(n.suspect)} was near the ${latest?.landmark ?? 'spot'} too. Kind of sus.` })
+      votes.push({ playerId: bot.id, targetId: n.suspect })
     } else {
-      lines.push({ playerId: bot.id, text: `I have not seen anything weird yet. I say we skip.` })
+      lines.push({ playerId: bot.id, text: 'I did not see anything. I would rather skip than guess.' })
       votes.push({ playerId: bot.id, targetId: 'skip' })
     }
-  }
-  if (lines.length > 1 && input.rng() < 0.7) {
-    const first = lines[0]
-    const reply = bots.find((b) => b.id !== first.playerId)
-    if (reply) lines.push({ playerId: reply.id, text: `Fair point about ${nameOf(votes[0]?.targetId ?? '')}. I am watching them too.` })
   }
   return { lines, votes, usedModel: false }
 }
@@ -177,28 +195,26 @@ export function heuristicMeeting(input: MeetingInput, bots: MeetingPlayer[]): Me
 /** One reply from an AI player who was named in a human's chat message. */
 export async function replyToMention(
   env: Env,
-  input: { botName: string; isImpostor: boolean; accuser: string; message: string; theirBuilds: string[] },
+  input: { botName: string; isImpostor: boolean; accuser: string; message: string; alibi: string[] },
 ): Promise<string> {
-  const builds = input.theirBuilds.length ? input.theirBuilds.map((b) => b.replace('_', ' ')).join(', ') : 'nothing yet'
+  const where = input.alibi.length ? input.alibi.join(' and the ') : 'my tasks'
   try {
     const anthropic = createDeepSpaceAI(env, 'anthropic')
     const result = await generateText({
       model: anthropic(AGENT_MODEL),
       system: [
-        `You are ${input.botName}, an AI player in Saboteur Island, a social deduction game about building a cozy fishing village.`,
+        `You are ${input.botName}, an AI player in Saboteur Island, a party game where crew fix up an island and one Impostor wrecks things.`,
         input.isImpostor
-          ? 'You are secretly the Impostor. Stay calm, explain your builds innocently, and point suspicion somewhere else. Never admit it.'
-          : 'You are crew. Answer honestly about what you built and what you saw.',
+          ? 'You are secretly the Impostor. Stay calm, give a believable alibi at a landmark, and point suspicion elsewhere. Never admit it.'
+          : `You are crew. Your tasks are at the ${where}. Answer honestly.`,
         'Reply with one casual chat line under 18 words. No emojis, no dashes, no quotes.',
       ].join('\n'),
-      prompt: `You built: ${builds}.\n${input.accuser} just said: "${input.message}"`,
+      prompt: `${input.accuser} just said: "${input.message}"`,
     })
     const line = String(result.text || '').split('\n').filter(Boolean)[0]?.replace(/[—–"]/g, '').trim()
     if (line) return line.slice(0, 160)
   } catch (err) {
     console.warn('[meeting-ai] reply fell back:', err instanceof Error ? err.message : err)
   }
-  return input.isImpostor
-    ? `Me? I only built ${builds}. Ask who walked to the weird stuff.`
-    : `I built ${builds}. All village stuff, check for yourself.`
+  return input.isImpostor ? 'Me? I was at the Well the whole time. Ask who was near the smoke.' : `I was working at the ${where}. You can check my stuff there.`
 }

@@ -37,10 +37,40 @@ export const CATALOG = {
   sheep: { fp: 0.3, words: ['sheep', 'lamb', 'lambs', 'animals', 'flock'], hint: 'fluffy sheep' },
   duck: { fp: 0.2, water: true, words: ['duck', 'ducks', 'duckling', 'ducklings'], hint: 'yellow rubber duck, floats on the pond' },
   volcano: { fp: 0.85, words: ['volcano', 'volcanoes', 'lava', 'magma'], hint: 'small volcano with glowing lava and smoke' },
-  pirate_flag: { fp: 0.22, words: ['flag', 'flags', 'pirate', 'pirates', 'banner'], hint: 'black flag on a pole' },
+  pirate_flag: { fp: 0.22, words: ['pirate', 'pirates', 'jolly'], hint: 'black pirate flag on a pole' },
   totem: { fp: 0.3, words: ['totem', 'totems', 'idol', 'statue', 'statues'], hint: 'carved wooden totem pole with glowing eyes' },
   cactus: { fp: 0.3, words: ['cactus', 'cacti', 'desert'], hint: 'tall green cactus' },
+  bird: { fp: 0.15, words: ['bird', 'birds', 'chick', 'robin', 'canary', 'sparrow', 'parrot', 'birdie'], hint: 'small round bird; can sit on a roof' },
+  bench: { fp: 0.35, words: ['bench', 'benches', 'seat', 'seats'], hint: 'wooden park bench' },
+  scarecrow: { fp: 0.3, words: ['scarecrow', 'scarecrows', 'strawman'], hint: 'scarecrow with a straw hat' },
+  flag: { fp: 0.2, words: ['flag', 'flags', 'banner', 'banners', 'pennant'], hint: 'flag on a tall pole, any color' },
+  beehive: { fp: 0.25, words: ['beehive', 'beehives', 'hive', 'hives', 'bees', 'bee', 'honey'], hint: 'wooden beehive box with bees' },
 } satisfies Record<string, CatalogEntry>
+
+/** The colors the builder can paint things. Tasks name colors from this list, so checks are exact. */
+export const COLORS = {
+  red: '#e0473f',
+  orange: '#f08a2c',
+  yellow: '#ffd23f',
+  green: '#4caf50',
+  blue: '#3f7fe0',
+  pink: '#ff7ab8',
+  purple: '#9b6cf0',
+  white: '#f4f1ea',
+  black: '#1f1b2a',
+  brown: '#8b5a3c',
+} as const
+
+export type ColorName = keyof typeof COLORS
+export const COLOR_NAMES = Object.keys(COLORS) as ColorName[]
+
+export function normalizeColor(value: unknown): ColorName | null {
+  if (typeof value !== 'string') return null
+  const v = value.toLowerCase().trim()
+  if ((COLOR_NAMES as string[]).includes(v)) return v as ColorName
+  const alias: Record<string, ColorName> = { gold: 'yellow', golden: 'yellow', grey: 'white', gray: 'white', violet: 'purple', crimson: 'red', navy: 'blue', teal: 'blue', cyan: 'blue', lime: 'green', tan: 'brown' }
+  return alias[v] ?? null
+}
 
 export type BuildType = keyof typeof CATALOG
 export const BUILD_TYPES = Object.keys(CATALOG) as BuildType[]

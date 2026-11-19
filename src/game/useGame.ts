@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from 'deepspace'
 import { serverNow } from './api'
-import type { BuildRow, ChatRow, EventRow, GameRow, OrderRow, PlayerRow, SecretRow, VoteRow } from './types'
+import type { Leg } from './bots'
+import type { BreakRow, BuildRow, ChatRow, EventRow, GameRow, PlayerRow, RouteRow, SecretRow, TaskRow, VoteRow } from './types'
 
 export interface Rec<T> {
   id: string
@@ -37,7 +38,6 @@ export function useGameData(code: string) {
       data: {
         ...g.data,
         reveal: parseJson<GameRow['reveal']>(g.data.reveal, null),
-        botPlan: parseJson<GameRow['botPlan']>(g.data.botPlan, []),
         botVotes: parseJson<GameRow['botVotes']>(g.data.botVotes, []),
       },
     }
@@ -46,8 +46,10 @@ export function useGameData(code: string) {
   const where = { gameId }
   const players = useQuery<PlayerRow>('players', { where, limit: 12 })
   const secrets = useQuery<SecretRow>('secrets', { where, limit: 12 })
+  const tasks = useQuery<TaskRow>('tasks', { where, limit: 40 })
   const builds = useQuery<BuildRow>('builds', { where, limit: 500 })
-  const orders = useQuery<OrderRow>('orders', { where, limit: 200 })
+  const breaks = useQuery<BreakRow>('breaks', { where, limit: 100 })
+  const routes = useQuery<RouteRow>('routes', { where, limit: 12 })
   const chat = useQuery<ChatRow>('chat', { where, limit: 300 })
   const votes = useQuery<VoteRow>('votes', { where, limit: 120 })
   const events = useQuery<EventRow>('events', { where, limit: 200 })
@@ -56,9 +58,18 @@ export function useGameData(code: string) {
     loading: games.status === 'loading',
     game,
     players: useMemo(() => toRecs(players.records).sort((a, b) => a.data.seat - b.data.seat), [players.records]),
-    secrets: useMemo(() => toRecs(secrets.records), [secrets.records]),
+    secrets: useMemo(
+      () => toRecs(secrets.records).map((s) => ({ ...s, data: { ...s.data, fakeTasks: parseJson<string[]>(s.data.fakeTasks, []) } })),
+      [secrets.records],
+    ),
+    tasks: useMemo(() => toRecs(tasks.records), [tasks.records]),
     builds: useMemo(() => toRecs(builds.records).sort((a, b) => a.data.seq - b.data.seq), [builds.records]),
-    orders: useMemo(() => toRecs(orders.records).sort((a, b) => a.data.at - b.data.at), [orders.records]),
+    breaks: useMemo(() => toRecs(breaks.records), [breaks.records]),
+    routes: useMemo(() => {
+      const out: Record<string, Leg[]> = {}
+      for (const r of routes.records) out[r.data.playerId] = parseJson<Leg[]>(r.data.legs, [])
+      return out
+    }, [routes.records]),
     chat: useMemo(() => toRecs(chat.records).sort((a, b) => a.data.showAt - b.data.showAt), [chat.records]),
     votes: useMemo(() => toRecs(votes.records), [votes.records]),
     events: useMemo(() => toRecs(events.records).sort((a, b) => a.data.at - b.data.at), [events.records]),

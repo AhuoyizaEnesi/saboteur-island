@@ -6,7 +6,8 @@
  */
 
 import { CATALOG, type BuildType } from './catalog'
-import { ISLAND, MEETING_SPOT } from './constants'
+import { ISLAND } from './constants'
+import { LANDMARKS } from './landmarks'
 import { streamInfo, STREAM_DIR } from './terrain'
 
 const { USABLE_R, POND } = ISLAND
@@ -70,7 +71,11 @@ function blocked(x: number, z: number, fp: number, placed: PlacedLike[]): boolea
   if (Math.hypot(x, z) > USABLE_R - fp * 0.4) return true
   if (Math.hypot(x - POND.x, z - POND.z) < POND.r + fp * 0.8 + 0.12) return true
   if (streamInfo(x, z).d < 0.28 + fp * 0.7) return true
-  if (Math.hypot(x - MEETING_SPOT.x, z - MEETING_SPOT.z) < 0.95 + fp) return true
+  for (const l of LANDMARKS) {
+    // Landmarks keep a clear core; the bell and the shed keep a wider ring for walking.
+    const keep = l.id === 'bell' ? 1.6 : l.id === 'power_shed' ? 1.3 : Math.max(l.solid, 0.5) + 0.2
+    if (Math.hypot(x - l.x, z - l.z) < keep + fp) return true
+  }
   for (const p of placed) {
     if (isWaterType(p.type) || p.type === 'dock') continue
     const pf = footprint(p.type, p.scale ?? 1)
@@ -88,11 +93,11 @@ export function findSpot(fp: number, near: Near, placed: PlacedLike[], rng: Rng)
     let z: number
     let r: number
     if (near === 'edge') {
-      r = rr(rng, 4.1, USABLE_R)
+      r = rr(rng, USABLE_R * 0.78, USABLE_R)
       x = Math.cos(a) * r
       z = Math.sin(a) * r
     } else if (near === 'center') {
-      r = Math.sqrt(rng()) * 2.4
+      r = Math.sqrt(rng()) * USABLE_R * 0.45
       x = Math.cos(a) * r
       z = Math.sin(a) * r
     } else if (near === 'pond') {

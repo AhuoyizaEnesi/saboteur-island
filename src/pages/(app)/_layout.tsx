@@ -16,7 +16,8 @@
  */
 
 import { Suspense, type ReactNode } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
+import Navigation from '@/components/Navigation'
 import { DeepSpaceAuthProvider, useAuthStatus } from 'deepspace'
 import { RecordProvider, RecordScope, AgentTools } from 'deepspace'
 import { useToast } from '@/components/ui'
@@ -30,14 +31,25 @@ export default function AppLayout() {
           when <Seo> unmounts, so every route without <Seo> sets its own. */}
       <title>{APP_NAME}</title>
       <AuthBoot>
-        {/* The game is full screen: no app chrome. */}
-        <div className="h-screen overflow-hidden bg-[#05040f]">
-          <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground">Loading...</div>}>
-            <Outlet />
-          </Suspense>
-        </div>
+        <Shell />
       </AuthBoot>
     </DeepSpaceAuthProvider>
+  )
+}
+
+/** A game (/g/CODE) is full screen with no app chrome; menus get the nav bar. */
+function Shell() {
+  const { pathname } = useLocation()
+  const inGame = pathname.startsWith('/g/')
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      {!inGame && <Navigation />}
+      <div className="relative min-h-0 flex-1">
+        <Suspense fallback={<div className="flex h-full items-center justify-center text-muted-foreground">Loading...</div>}>
+          <Outlet />
+        </Suspense>
+      </div>
+    </div>
   )
 }
 

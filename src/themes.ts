@@ -23,6 +23,11 @@ export const THEMES = [
     description: 'Neutral dark placeholder default. Replace with your own theme.',
   },
   {
+    id: 'island',
+    label: 'Island at night',
+    description: 'Saboteur Island: deep navy, cyan crew, coral danger, gold tasks.',
+  },
+  {
     id: 'paper',
     label: 'Paper',
     description: 'Light example theme showing the token contract. Replace or delete.',

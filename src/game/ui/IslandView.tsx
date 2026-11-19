@@ -7,6 +7,7 @@ interface Props {
   onReady: (scene: IslandScene | null) => void
   onGroundClick?: (x: number, z: number) => void
   onBellClick?: () => void
+  onMyMove?: (x: number, z: number) => void
   onFail?: () => void
 }
 
@@ -22,6 +23,7 @@ export function IslandView(props: Props) {
       s = new IslandScene(host.current, {
         onGroundClick: (x, z) => handlers.current.onGroundClick?.(x, z),
         onBellClick: () => handlers.current.onBellClick?.(),
+        onMyMove: (x, z) => handlers.current.onMyMove?.(x, z),
       })
       handlers.current.onReady(s)
     } catch (err) {

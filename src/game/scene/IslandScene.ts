@@ -11,12 +11,16 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
-import { ISLAND, MEETING_SPOT, type TimeOfDay, type Weather } from '../constants'
+import { ISLAND, MEETING_SPOT, WALK_SPEED, type TimeOfDay, type Weather } from '../constants'
+import { LANDMARKS, walkable } from '../landmarks'
+import { routePos, type Leg } from '../bots'
 import { streamInfo, streamLevel, STREAM_DIR, STREAM_END, STREAM_START, terrainH, clamp, smooth } from '../terrain'
 import { Fx, canvasTex, pick, rand } from './fx'
-import { buildIslander, buildMeetingBell, buildModel, type Islander } from './models'
+import { buildIslander, buildLandmark, buildMeetingBell, buildModel, paintOver, type Islander } from './models'
 
 const { TOP_R, POND, POND_Y } = ISLAND
+/** How much bigger this island is than the first prototype's; scales scenery around it. */
+const K = TOP_R / 6.2
 
 export interface SceneBuild {
   id: string
@@ -29,6 +33,17 @@ export interface SceneBuild {
   playerId: string
   orderId: string
   seq: number
+  /** Height above the ground (a bird on a roof). */
+  lift?: number
+  colorName?: string
+  /** 'knocked' lies on its side; 'painted' is painted over. */
+  state?: string
+}
+
+export interface SceneBreak {
+  id: string
+  x: number
+  z: number
 }
 
 export interface ScenePlayer {
@@ -38,12 +53,22 @@ export interface ScenePlayer {
   alive: boolean
   isMe: boolean
   seat: number
+  /** AI players stroll around on their own; humans only move when they do. */
+  wanders?: boolean
+  /** An ejected player drawn as a see-through ghost (only other ghosts see them). */
+  ghost?: boolean
 }
 
 interface SceneOptions {
   onGroundClick?: (x: number, z: number) => void
   onBellClick?: () => void
+  /** Fires every frame the controlled islander moves. */
+  onMyMove?: (x: number, z: number) => void
+  /** Draw place names and player names (off for the landing hero). */
+  labels?: boolean
 }
+
+export type CameraMode = 'orbit' | 'follow'
 
 const EASE = {
   inOutCubic: (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
@@ -89,6 +114,9 @@ interface Character {
   /** Position supplied by presence for another human; overrides wandering. */
   remote: THREE.Vector2 | null
   busyUntil: number
+  /** Timed walking legs for an AI player, evaluated against the shared clock. */
+  route: Leg[] | null
+  ghost: boolean
 }
 
 const TIMES: Record<TimeOfDay, { sun: string; sunI: number; sunPos: [number, number, number]; hemiSky: string; hemiGround: string; hemiI: number; top: string; mid: string; bottom: string; stars: number; glow: number; exposure: number }> = {
@@ -117,6 +145,8 @@ export class IslandScene {
   private camTweening = false
   private disposed = false
   private pointScale = { value: 1 }
+  /** prefers-reduced-motion: no auto turning, camera moves jump instead of gliding. */
+  private reduceMotion = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
   private hemi: THREE.HemisphereLight
   private sun: THREE.DirectionalLight
@@ -127,6 +157,8 @@ export class IslandScene {
     hemiI: 0, top: new THREE.Color(), mid: new THREE.Color(), bottom: new THREE.Color(), stars: 0, glow: 0, exposure: 1,
   }
   private envToken = 0
+  /** In follow view the sun's shadow box moves with you so shadows stay sharp. */
+  private sunFocus = new THREE.Vector3()
   private currentTime: TimeOfDay = 'day'
   private lightsOut = 0
   private lightsOutTarget = 0
@@ -174,6 +206,13 @@ export class IslandScene {
   private smokePtr = 0
 
   private builds = new Map<string, BuildRec>()
+  private breaks = new Map<string, THREE.Group>()
+  private focusRing: THREE.Mesh
+  private focusMat: THREE.MeshBasicMaterial
+  private clockFn: () => number = () => Date.now()
+  private visionR: number | null = null
+  private visionEl: HTMLElement | null = null
+  private visionShown = { rx: 0, ry: 0 }
   private characters = new Map<string, Character>()
   private pbeams: { m: THREE.Mesh; life: number; max: number }[] = []
   private bursts: { pts: THREE.Points; v: THREE.Vector3[]; life: number; max: number }[] = []
@@ -188,6 +227,13 @@ export class IslandScene {
   private bellButton: THREE.Mesh
   private bellGroup: THREE.Group
   private bellRing = 0
+  private camMode: CameraMode = 'orbit'
+  private controlledId: string | null = null
+  private canMove = false
+  private keys = new Set<string>()
+  private followZoom = 1
+  private landmarkLabels: { obj: CSS2DObject; x: number; z: number }[] = []
+  private shedPanel: THREE.MeshStandardMaterial | null = null
   private raycaster = new THREE.Raycaster()
   private pointerDown: { x: number; y: number; t: number } | null = null
   private lastInteract = 0
@@ -212,17 +258,17 @@ export class IslandScene {
 
     this.scene.fog = new THREE.FogExp2(0x0a0820, 0.008)
     this.camera = new THREE.PerspectiveCamera(42, w / h, 0.1, 3000)
-    this.camera.position.set(-22, 13, 40)
+    this.camera.position.set(-22 * K, 13 * K, 40 * K)
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.target.set(0, 0.3, 0)
     this.controls.enableDamping = true
     this.controls.dampingFactor = 0.06
     this.controls.minDistance = 6
-    this.controls.maxDistance = 40
+    this.controls.maxDistance = 30 * K
     this.controls.maxPolarAngle = Math.PI * 0.62
     this.controls.enablePan = false
-    this.controls.autoRotate = true
+    this.controls.autoRotate = !this.reduceMotion
     this.controls.autoRotateSpeed = 0.3
     this.controls.addEventListener('start', () => {
       this.lastInteract = performance.now()
@@ -249,7 +295,7 @@ export class IslandScene {
     this.sun = new THREE.DirectionalLight(0xfff3dc, 2.4)
     this.sun.castShadow = true
     this.sun.shadow.mapSize.set(2048, 2048)
-    Object.assign(this.sun.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 1, far: 70 })
+    Object.assign(this.sun.shadow.camera, { left: -14, right: 14, top: 14, bottom: -14, near: 1, far: 90 })
     this.sun.shadow.bias = -0.0004
     this.sun.shadow.normalBias = 0.03
     this.scene.add(this.sun, this.sun.target)
@@ -271,8 +317,15 @@ export class IslandScene {
     const bell = buildMeetingBell(this.fx)
     this.bellGroup = bell.group
     this.bellButton = bell.button
+    bell.group.scale.setScalar(1.25)
     bell.group.position.set(MEETING_SPOT.x, terrainH(MEETING_SPOT.x, MEETING_SPOT.z) - 0.02, MEETING_SPOT.z)
     this.island.add(bell.group)
+    this.buildLandmarks()
+    this.focusMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffd166'), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })
+    this.focusRing = new THREE.Mesh(new THREE.RingGeometry(1.25, 1.42, 64), this.focusMat)
+    this.focusRing.rotation.x = -Math.PI / 2
+    this.focusRing.visible = false
+    this.island.add(this.focusRing)
 
     this.placeBeamGeo = new THREE.CylinderGeometry(0.05, 0.17, 10, 12, 1, true)
     this.placeBeamGeo.translate(0, 5, 0)
@@ -297,7 +350,11 @@ export class IslandScene {
     const el = this.renderer.domElement
     el.addEventListener('pointerdown', this.onPointerDown)
     el.addEventListener('pointerup', this.onPointerUp)
+    el.addEventListener('wheel', this.onWheel, { passive: true })
     window.addEventListener('resize', this.onResize)
+    window.addEventListener('keydown', this.onKeyDown)
+    window.addEventListener('keyup', this.onKeyUp)
+    window.addEventListener('blur', this.onBlur)
     this.frame()
   }
 
@@ -308,21 +365,40 @@ export class IslandScene {
     const ids = new Set(list.map((b) => b.id))
     for (const [id, rec] of this.builds) {
       if (!ids.has(id)) {
+        if (animate && rec.shown) this.burst(rec.root.position.clone().add(new THREE.Vector3(0, 0.3, 0)), '#ff4d6d', 30)
         this.island.remove(rec.root)
         this.builds.delete(id)
       }
     }
     const fresh: SceneBuild[] = []
     for (const b of list) {
-      if (this.builds.has(b.id)) continue
-      const root = buildModel(this.fx, b.type, b.playerId === 'world' ? undefined : undefined)
-      const y = this.isWater(b.type) ? POND_Y - 0.01 : b.type === 'dock' ? POND_Y - 0.02 : terrainH(b.x, b.z) - 0.02
+      const prev = this.builds.get(b.id)
+      if (prev && (prev.build.state ?? 'ok') === (b.state ?? 'ok') && (prev.build.colorName ?? '') === (b.colorName ?? '')) continue
+      if (prev) {
+        // A wreck changed it: swap the model in place with a puff.
+        this.island.remove(prev.root)
+        this.builds.delete(b.id)
+        if (animate) this.burst(prev.root.position.clone().add(new THREE.Vector3(0, 0.3, 0)), '#ff4d6d', 30)
+      }
+      const painted = b.state === 'painted'
+      const root = buildModel(this.fx, b.type, b.color && !painted ? b.color : undefined)
+      if (painted) paintOver(root, b.color || '#1f1b2a')
+      const y = this.isWater(b.type) ? POND_Y - 0.01 : b.type === 'dock' ? POND_Y - 0.02 : terrainH(b.x, b.z) - 0.02 + (b.lift ?? 0)
       root.position.set(b.x, y, b.z)
       root.rotation.y = b.rot
+      if (b.state === 'knocked') {
+        root.rotation.z = Math.PI / 2.2
+        root.position.y += 0.05
+      }
       const target = root.scale.clone().multiplyScalar(b.scale || 1)
       const rec: BuildRec = { build: b, root, target, shown: false }
       this.builds.set(b.id, rec)
       this.island.add(root)
+      if (prev) {
+        root.scale.copy(target)
+        rec.shown = true
+        continue
+      }
       if (animate && b.playerId !== 'world') {
         root.visible = false
         root.scale.setScalar(0.0001)
@@ -350,7 +426,15 @@ export class IslandScene {
       if (existing) {
         existing.player = p
         existing.labelDiv.textContent = p.isMe ? `${p.name} (you)` : p.name
-        if (!p.alive && !existing.ejecting && !existing.gone) {
+        if (p.ghost && !existing.ghost && !existing.ejecting) {
+          existing.gone = false
+          existing.model.root.visible = true
+          existing.label.visible = true
+          existing.model.root.scale.setScalar(1)
+          existing.model.root.rotation.set(0, existing.heading, 0)
+          existing.labelDiv.style.opacity = '1'
+          this.makeGhost(existing)
+        } else if (!p.alive && !p.ghost && !existing.ejecting && !existing.gone) {
           existing.gone = true
           existing.model.root.visible = false
           existing.label.visible = false
@@ -365,6 +449,7 @@ export class IslandScene {
       const label = new CSS2DObject(div)
       label.position.set(0, 0.78, 0)
       model.root.add(label)
+      if (this.opts.labels === false) div.classList.add('si-nolabel')
       const home = this.seatHome(p.seat)
       const start = home.clone().add(new THREE.Vector2(rand(-0.4, 0.4), rand(-0.4, 0.4)))
       model.root.position.set(start.x, terrainH(start.x, start.y), start.y)
@@ -372,13 +457,14 @@ export class IslandScene {
       const c: Character = {
         player: p, model, label, labelDiv: div, pos: start, target: null, home, nextWander: this.elapsed + rand(1, 4),
         walkPhase: rand(0, 6), heading: rand(0, Math.PI * 2), ejecting: false, ejectT: 0, ejectV: new THREE.Vector3(),
-        gone: !p.alive, remote: null, busyUntil: 0,
+        gone: !p.alive && !p.ghost, remote: null, busyUntil: 0, route: null, ghost: false,
       }
-      if (!p.alive) {
+      if (!p.alive && !p.ghost) {
         model.root.visible = false
         label.visible = false
       }
       this.characters.set(p.id, c)
+      if (p.ghost) this.makeGhost(c)
     }
   }
 
@@ -387,13 +473,118 @@ export class IslandScene {
     const c = this.characters.get(playerId)
     if (!c || c.gone || c.ejecting || this.meeting) return
     const p = this.clampWalkable(x, z)
-    if (remote) c.remote = p
+    if (remote) {
+      // Presence updates arrive about ten times a second; a big jump means we
+      // missed some, so snap instead of sliding across the island.
+      if (c.pos.distanceTo(p) > 4) c.pos.copy(p)
+      c.remote = p
+    }
     c.target = p
+  }
+
+  /** Put an islander exactly at a spot (after a meeting, or on first load). */
+  placeAt(playerId: string, x: number, z: number) {
+    const c = this.characters.get(playerId)
+    if (!c) return
+    const p = this.clampWalkable(x, z)
+    c.pos.copy(p)
+    c.target = null
+    c.remote = null
   }
 
   getCharacterPos(playerId: string): { x: number; z: number } | null {
     const c = this.characters.get(playerId)
     return c ? { x: c.pos.x, z: c.pos.y } : null
+  }
+
+  /**
+   * Hand the keyboard and clicks to one islander (yours). `canMove` is false
+   * during meetings and after you are ejected.
+   */
+  setControlled(playerId: string | null, canMove: boolean) {
+    if (playerId !== this.controlledId) this.keys.clear()
+    this.controlledId = playerId
+    this.canMove = canMove
+    if (!canMove) {
+      const c = playerId ? this.characters.get(playerId) : null
+      if (c && !this.meeting) c.target = null
+    }
+  }
+
+  /**
+   * How far you can see other islanders. Anyone outside the circle is hidden,
+   * and an element (a full screen overlay) gets the circle's size on screen as
+   * CSS variables so the world outside it can be darkened. null sees everything.
+   */
+  setVision(radius: number | null, el?: HTMLElement | null) {
+    this.visionR = radius
+    if (el !== undefined) this.visionEl = el
+  }
+
+  /** Shared clock (server time) for AI players' routes. */
+  setClock(fn: () => number) {
+    this.clockFn = fn
+  }
+
+  /** AI players walk their planned legs; everyone draws the same legs. */
+  setRoutes(routes: Record<string, Leg[]>) {
+    for (const [id, c] of this.characters) c.route = routes[id] ?? null
+  }
+
+  /** Smoke and rubble where a finished task was wrecked. */
+  setBreaks(list: SceneBreak[]) {
+    const ids = new Set(list.map((b) => b.id))
+    for (const [id, g] of this.breaks) {
+      if (!ids.has(id)) {
+        this.island.remove(g)
+        this.breaks.delete(id)
+      }
+    }
+    for (const b of list) {
+      if (this.breaks.has(b.id)) continue
+      const g = new THREE.Group()
+      g.position.set(b.x, terrainH(b.x, b.z), b.z)
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + rand(-0.3, 0.3)
+        g.add(this.fx.mesh(new THREE.DodecahedronGeometry(rand(0.05, 0.1), 0), this.fx.mat('#4a3d4f'), Math.cos(a) * rand(0.15, 0.4), 0.04, Math.sin(a) * rand(0.15, 0.4)))
+      }
+      const scorch = new THREE.Mesh(new THREE.CircleGeometry(0.55, 24), new THREE.MeshBasicMaterial({ color: '#1a1420', transparent: true, opacity: 0.55, depthWrite: false }))
+      scorch.rotation.x = -Math.PI / 2
+      scorch.position.y = 0.015
+      g.add(scorch)
+      this.fx.emitters.push({ root: g, offset: new THREE.Vector3(0, 0.2, 0), rate: 4, acc: 0, tint: new THREE.Color('#3a3040'), size: 0.6, alpha: 0.55, rise: 0.55 })
+      this.island.add(g)
+      this.breaks.set(b.id, g)
+    }
+  }
+
+  /** A glowing ring on the ground at the landmark you can use. */
+  setFocus(spot: { x: number; z: number; r?: number; color?: string } | null) {
+    if (!spot) {
+      this.focusRing.visible = false
+      return
+    }
+    this.focusRing.visible = true
+    this.focusRing.position.set(spot.x, terrainH(spot.x, spot.z) + 0.04, spot.z)
+    this.focusRing.scale.setScalar(spot.r ?? 1)
+    this.focusMat.color.set(spot.color ?? '#ffd166')
+  }
+
+  /** Orbit view for the lobby and the end screen; follow view while playing. */
+  setCameraMode(mode: CameraMode) {
+    if (mode === this.camMode) return
+    this.camMode = mode
+    this.controls.enabled = mode === 'orbit'
+    const cam = this.sun.shadow.camera
+    const r = mode === 'follow' ? 9 : 14
+    Object.assign(cam, { left: -r, right: r, top: r, bottom: -r })
+    cam.updateProjectionMatrix()
+    if (mode === 'orbit') {
+      this.sun.target.position.set(0, 0, 0)
+      this.home(1600)
+    } else {
+      this.controls.autoRotate = false
+    }
   }
 
   setEnvironment(time: TimeOfDay, weather: Weather) {
@@ -423,15 +614,17 @@ export class IslandScene {
     alive.forEach((c, i) => {
       if (on) {
         const a = (i / Math.max(1, alive.length)) * Math.PI * 2 + 0.4
-        c.target = new THREE.Vector2(MEETING_SPOT.x + Math.cos(a) * 1.0, MEETING_SPOT.z + Math.sin(a) * 1.0)
+        const seat = new THREE.Vector2(MEETING_SPOT.x + Math.cos(a) * 1.55, MEETING_SPOT.z + Math.sin(a) * 1.55)
+        c.pos.copy(seat)
+        c.target = null
         c.remote = null
       } else {
         c.target = null
         c.nextWander = this.elapsed + rand(0.5, 2)
       }
     })
-    if (on) this.swoop(new THREE.Vector3(MEETING_SPOT.x, 0.4, MEETING_SPOT.z), new THREE.Vector3(3.2, 3.4, 4.2), 1800)
-    else this.home(1800)
+    if (on) this.swoop(new THREE.Vector3(MEETING_SPOT.x, 0.6, MEETING_SPOT.z), new THREE.Vector3(3.6, 4.2, 5.2), 1400)
+    else if (this.camMode === 'orbit') this.home(1800)
   }
 
   /** Fling a character off the island into space. */
@@ -495,17 +688,17 @@ export class IslandScene {
     const from = this.camera.position.clone()
     this.camTweening = true
     this.tween(3600, (k) => {
-      this.camera.position.lerpVectors(from, new THREE.Vector3(10.8, 6.6, 12.6), k)
+      this.camera.position.lerpVectors(from, new THREE.Vector3(10.8 * K, 6.6 * K, 12.6 * K), k)
       this.camera.lookAt(this.controls.target)
     }).then(() => {
       this.camTweening = false
-      this.controls.autoRotate = true
+      this.controls.autoRotate = !this.reduceMotion
     })
   }
 
   home(dur = 2000) {
-    this.swoop(new THREE.Vector3(0, 0.3, 0), new THREE.Vector3(10.8, 6.3, 12.6), dur).then(() => {
-      this.controls.autoRotate = true
+    this.swoop(new THREE.Vector3(0, 0.3, 0), new THREE.Vector3(10.8 * K, 6.3 * K, 12.6 * K), dur).then(() => {
+      this.controls.autoRotate = !this.reduceMotion
     })
   }
 
@@ -521,8 +714,13 @@ export class IslandScene {
     this.disposed = true
     cancelAnimationFrame(this.raf)
     window.removeEventListener('resize', this.onResize)
+    window.removeEventListener('keydown', this.onKeyDown)
+    window.removeEventListener('keyup', this.onKeyUp)
+    window.removeEventListener('blur', this.onBlur)
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown)
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp)
+    this.renderer.domElement.removeEventListener('wheel', this.onWheel)
+    for (const l of this.landmarkLabels) l.obj.element.remove()
     this.controls.dispose()
     this.renderer.dispose()
     this.composer.dispose()
@@ -542,22 +740,8 @@ export class IslandScene {
     }
     for (const group of groups.values()) {
       group.sort((a, b) => a.seq - b.seq)
-      const first = group[0]
-      const c = this.characters.get(first.playerId)
-      let delay = 300
-      if (c && !c.gone && !this.meeting) {
-        const toward = new THREE.Vector2(-first.x, -first.z)
-        if (toward.lengthSq() < 0.01) toward.set(1, 0)
-        toward.normalize().multiplyScalar(0.55)
-        const spot = this.clampWalkable(first.x + toward.x, first.z + toward.y)
-        c.target = spot
-        c.remote = null
-        c.busyUntil = this.elapsed + 6
-        const dist = c.pos.distanceTo(spot)
-        delay = clamp((dist / 1.8) * 1000, 500, 2600)
-      }
       group.forEach((b, i) => {
-        window.setTimeout(() => this.popIn(b.id), delay + i * 200)
+        window.setTimeout(() => this.popIn(b.id), 250 + i * 220)
       })
     }
   }
@@ -581,21 +765,50 @@ export class IslandScene {
 
   private seatHome(seat: number): THREE.Vector2 {
     const a = (seat / 6) * Math.PI * 2 + 2.3
-    const p = new THREE.Vector2(Math.cos(a) * 2.4, Math.sin(a) * 2.4)
+    const p = new THREE.Vector2(MEETING_SPOT.x + Math.cos(a) * 2.2, MEETING_SPOT.z + Math.sin(a) * 2.2)
     return this.clampWalkable(p.x, p.y)
   }
 
+  private makeGhost(c: Character) {
+    c.ghost = true
+    c.model.root.traverse((o) => {
+      const m = o as THREE.Mesh
+      if (!m.isMesh || Array.isArray(m.material)) return
+      const mat = (m.material as THREE.Material).clone()
+      mat.transparent = true
+      mat.opacity = 0.4
+      mat.depthWrite = false
+      m.material = mat
+      m.castShadow = false
+    })
+    c.labelDiv.classList.add('ghost')
+  }
+
   private clampWalkable(x: number, z: number): THREE.Vector2 {
-    const v = new THREE.Vector2(x, z)
-    const r = v.length()
-    if (r > ISLAND.USABLE_R) v.multiplyScalar(ISLAND.USABLE_R / r)
-    const dp = new THREE.Vector2(v.x - POND.x, v.y - POND.z)
-    if (dp.length() < POND.r + 0.25) {
-      if (dp.lengthSq() < 0.001) dp.set(1, 0)
-      dp.normalize().multiplyScalar(POND.r + 0.3)
-      v.set(POND.x + dp.x, POND.z + dp.y)
+    const p = walkable(x, z)
+    return new THREE.Vector2(p.x, p.z)
+  }
+
+  private buildLandmarks() {
+    for (const l of LANDMARKS) {
+      if (l.id !== 'bell') {
+        const { group, panel } = buildLandmark(this.fx, l.id)
+        const y = l.id === 'dock' ? POND_Y - 0.02 : terrainH(l.x, l.z) - 0.02
+        group.position.set(l.x, y, l.z)
+        group.rotation.y = l.rot
+        this.island.add(group)
+        if (panel) this.shedPanel = panel
+      }
+      if (this.opts.labels === false) continue
+      const div = document.createElement('div')
+      div.className = 'si-place'
+      div.textContent = l.name
+      const label = new CSS2DObject(div)
+      const top = l.id === 'lighthouse' ? 3.3 : l.id === 'windmill' ? 2.6 : l.id === 'bell' ? 1.6 : l.id.includes('cottage') ? 1.9 : 1.3
+      label.position.set(l.x, terrainH(l.x, l.z) + top, l.z)
+      this.island.add(label)
+      this.landmarkLabels.push({ obj: label, x: l.x, z: l.z })
     }
-    return v
   }
 
   private buildSky() {
@@ -673,8 +886,8 @@ export class IslandScene {
   private outerRing: THREE.Vector3[] = []
 
   private buildTerrain() {
-    const N = 16
-    const M = 64
+    const N = 26
+    const M = 96
     const pos: number[] = [0, terrainH(0, 0), 0]
     for (let i = 1; i <= N; i++) {
       const r0 = (TOP_R * i) / N
@@ -743,11 +956,12 @@ export class IslandScene {
         const deep = y < -1
         const lump = deep ? 1 + 0.13 * Math.sin(a * 3 + i * 1.7) + 0.08 * Math.sin(a * 7 + i * 2.3) + rand(-0.035, 0.035) : 1
         const r = TOP_R * rs * lump
-        ring.push(new THREE.Vector3(Math.cos(a) * r, y + (deep ? Math.sin(a * 5 + i) * 0.22 : 0), Math.sin(a) * r))
+        const yy = deep ? y * K * 0.85 : y
+        ring.push(new THREE.Vector3(Math.cos(a) * r, yy + (deep ? Math.sin(a * 5 + i) * 0.3 : 0), Math.sin(a) * r))
       }
       rings.push(ring)
     })
-    const tip = new THREE.Vector3(0.15, -7.7, -0.1)
+    const tip = new THREE.Vector3(0.15, -7.7 * K * 0.85, -0.1)
     const pos: number[] = []
     const pv = (v: THREE.Vector3) => pos.push(v.x, v.y, v.z)
     for (let i = 0; i < rings.length - 1; i++) {
@@ -767,7 +981,8 @@ export class IslandScene {
     g.computeVertexNormals()
     const P = g.attributes.position
     const col = new Float32Array(P.count * 3)
-    const stops: [number, string][] = [[0.1, '#4f9a45'], [-0.45, '#4a8a40'], [-0.7, '#8a5a3a'], [-1.6, '#6e4a3c'], [-3.0, '#55405a'], [-4.6, '#3c3152'], [-8, '#241e38']]
+    const D = K * 0.85
+    const stops: [number, string][] = [[0.1, '#4f9a45'], [-0.45, '#4a8a40'], [-0.7, '#8a5a3a'], [-1.6 * D, '#6e4a3c'], [-3.0 * D, '#55405a'], [-4.6 * D, '#3c3152'], [-8 * D, '#241e38']]
     const c = new THREE.Color()
     const ca = new THREE.Color()
     const cb = new THREE.Color()
@@ -848,7 +1063,8 @@ export class IslandScene {
   private buildShards() {
     for (let i = 0; i < 11; i++) {
       const m = new THREE.Mesh(new THREE.IcosahedronGeometry(rand(0.18, 0.5), 0), new THREE.MeshStandardMaterial({ color: pick(['#5a4560', '#6e4a3c', '#4a3d5e']), flatShading: true, roughness: 0.9 }))
-      m.userData = { a: rand(0, Math.PI * 2), r: rand(6.8, 9.5), y: rand(-6.5, -1.2), s: rand(0.04, 0.1) * (Math.random() < 0.5 ? 1 : -1), ph: rand(0, 6) }
+      m.scale.setScalar(K * 0.8)
+      m.userData = { a: rand(0, Math.PI * 2), r: rand(6.8, 9.5) * K, y: rand(-6.5, -1.2) * K, s: rand(0.03, 0.07) * (Math.random() < 0.5 ? 1 : -1), ph: rand(0, 6) }
       m.castShadow = true
       this.island.add(m)
       this.shards.push(m)
@@ -877,12 +1093,12 @@ export class IslandScene {
   }
 
   private buildWeather() {
-    const RAIN_N = 900
+    const RAIN_N = 1800
     this.rainPos = new Float32Array(RAIN_N * 6)
     this.rainSpd = new Float32Array(RAIN_N)
     for (let i = 0; i < RAIN_N; i++) {
       const a = rand(0, Math.PI * 2)
-      const r = Math.sqrt(Math.random()) * 11
+      const r = Math.sqrt(Math.random()) * 11 * K
       const x = Math.cos(a) * r
       const z = Math.sin(a) * r
       const y = rand(-7, 16)
@@ -895,12 +1111,12 @@ export class IslandScene {
     this.rain.frustumCulled = false
     this.scene.add(this.rain)
 
-    const SNOW_N = 750
+    const SNOW_N = 1500
     this.snowPos = new Float32Array(SNOW_N * 3)
     this.snowPh = new Float32Array(SNOW_N)
     for (let i = 0; i < SNOW_N; i++) {
       const a = rand(0, Math.PI * 2)
-      const r = Math.sqrt(Math.random()) * 11
+      const r = Math.sqrt(Math.random()) * 11 * K
       this.snowPos.set([Math.cos(a) * r, rand(-7, 14), Math.sin(a) * r], i * 3)
       this.snowPh[i] = rand(0, 10)
     }
@@ -910,11 +1126,11 @@ export class IslandScene {
     this.snow.frustumCulled = false
     this.scene.add(this.snow)
 
-    const FF_N = 90
+    const FF_N = 200
     this.ffPos = new Float32Array(FF_N * 3)
     for (let i = 0; i < FF_N; i++) {
       const a = rand(0, Math.PI * 2)
-      const r = Math.sqrt(Math.random()) * 5.6
+      const r = Math.sqrt(Math.random()) * ISLAND.USABLE_R
       const x = Math.cos(a) * r
       const z = Math.sin(a) * r
       this.ffBase.push({ x, z, y: terrainH(x, z) + rand(0.25, 2.2), ph: rand(0, 10), sp: rand(0.4, 0.9) })
@@ -956,7 +1172,8 @@ export class IslandScene {
     const dark = 1 - this.lightsOut * 0.88
     this.sun.color.copy(this.env.sun)
     this.sun.intensity = this.env.sunI * dark
-    this.sun.position.copy(this.env.sunPos)
+    this.sun.position.copy(this.env.sunPos).add(this.sunFocus)
+    this.sun.target.position.copy(this.sunFocus)
     this.hemi.color.copy(this.env.hemiSky)
     this.hemi.groundColor.copy(this.env.hemiGround)
     this.hemi.intensity = this.env.hemiI * (1 - this.lightsOut * 0.8)
@@ -1057,6 +1274,7 @@ export class IslandScene {
   }
 
   private tween(dur: number, fn: (k: number) => void, ease: (t: number) => number = EASE.inOutCubic): Promise<void> {
+    if (this.reduceMotion) dur = 1
     return new Promise((resolve) => this.tweens.push({ t0: performance.now(), dur, fn, ease, resolve }))
   }
 
@@ -1094,16 +1312,71 @@ export class IslandScene {
       return
     }
     const hit = this.raycaster.intersectObject(this.terrainMesh, false)[0]
-    if (hit && this.opts.onGroundClick) {
-      const local = this.island.worldToLocal(hit.point.clone())
-      this.opts.onGroundClick(local.x, local.z)
+    if (!hit) return
+    const local = this.island.worldToLocal(hit.point.clone())
+    const me = this.controlledId ? this.characters.get(this.controlledId) : null
+    if (me && this.canMove && !this.meeting && !me.gone && !me.ejecting) {
+      me.target = this.clampWalkable(local.x, local.z)
+      me.remote = null
     }
+    this.opts.onGroundClick?.(local.x, local.z)
   }
+
+  private onWheel = (e: WheelEvent) => {
+    if (this.camMode !== 'follow') return
+    this.followZoom = clamp(this.followZoom * (e.deltaY > 0 ? 1.08 : 0.93), 0.6, 1.8)
+  }
+
+  private static MOVE_KEYS: Record<string, [number, number]> = {
+    w: [0, -1], arrowup: [0, -1], s: [0, 1], arrowdown: [0, 1], a: [-1, 0], arrowleft: [-1, 0], d: [1, 0], arrowright: [1, 0],
+  }
+
+  private onKeyDown = (e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+    if (e.metaKey || e.ctrlKey || e.altKey) return
+    const k = e.key.toLowerCase()
+    if (!IslandScene.MOVE_KEYS[k]) return
+    if (k.startsWith('arrow')) e.preventDefault()
+    this.keys.add(k)
+  }
+
+  private onKeyUp = (e: KeyboardEvent) => {
+    this.keys.delete(e.key.toLowerCase())
+  }
+
+  private onBlur = () => {
+    this.keys.clear()
+  }
+
+  private followCam(dt: number) {
+    const me = this.controlledId ? this.characters.get(this.controlledId) : null
+    if (!me || this.meeting) return
+    const ground = terrainH(me.pos.x, me.pos.y)
+    const focus = this.island.localToWorld(this.tmpV.set(me.pos.x, ground + 0.35, me.pos.y)).clone()
+    const z = this.followZoom
+    const want = focus.clone().add(new THREE.Vector3(0, 4.9 * z, 5.3 * z))
+    const k = Math.min(1, dt * 5)
+    this.camera.position.lerp(want, k)
+    this.controls.target.lerp(focus, k)
+    this.camera.lookAt(this.controls.target)
+    this.sunFocus.set(me.pos.x, 0, me.pos.y)
+  }
+
+  /** Slide the picture sideways (a fraction of the width) so copy can sit beside the island. */
+  setViewShift(fraction: number) {
+    this.viewShift = fraction
+    this.onResize()
+  }
+
+  private viewShift = 0
 
   private onResize = () => {
     const w = this.container.clientWidth || window.innerWidth
     const h = this.container.clientHeight || window.innerHeight
     this.camera.aspect = w / h
+    if (this.viewShift) this.camera.setViewOffset(w, h, -w * this.viewShift, 0, w, h)
+    else this.camera.clearViewOffset()
     this.camera.updateProjectionMatrix()
     this.renderer.setSize(w, h)
     this.composer.setSize(w, h)
@@ -1343,10 +1616,38 @@ export class IslandScene {
 
     this.updateCharacters(dt, t)
 
-    if (!this.camTweening) {
-      if (!this.controls.autoRotate && !this.meeting && performance.now() - this.lastInteract > 9000 && this.lastInteract > 0) this.controls.autoRotate = true
-      this.controls.update()
+    if (this.focusRing.visible) {
+      this.focusMat.opacity = 0.45 + Math.sin(t * 4) * 0.2
+      this.focusRing.rotation.z += dt * 0.6
     }
+    if (this.shedPanel) {
+      if (this.lightsOutTarget > 0) {
+        this.shedPanel.emissive.set('#ff2a4a')
+        this.shedPanel.emissiveIntensity = 0.5 + Math.max(0, Math.sin(t * 8)) * 1.4
+      } else {
+        this.shedPanel.emissive.set('#ffb020')
+        this.shedPanel.emissiveIntensity = 0.8 + glow * 0.5
+      }
+    }
+    if (this.camMode === 'follow') {
+      const me = this.controlledId ? this.characters.get(this.controlledId) : null
+      for (const l of this.landmarkLabels) {
+        const d = me ? Math.hypot(me.pos.x - l.x, me.pos.y - l.z) : 0
+        l.obj.element.style.opacity = String(clamp(1.4 - d / 9, 0.15, 1))
+      }
+    } else if (this.landmarkLabels.length && this.landmarkLabels[0].obj.element.style.opacity !== '1') {
+      for (const l of this.landmarkLabels) l.obj.element.style.opacity = '1'
+      this.sunFocus.set(0, 0, 0)
+    }
+
+    if (!this.camTweening) {
+      if (this.camMode === 'follow') this.followCam(dt)
+      else {
+        if (!this.reduceMotion && !this.controls.autoRotate && !this.meeting && performance.now() - this.lastInteract > 9000 && this.lastInteract > 0) this.controls.autoRotate = true
+        this.controls.update()
+      }
+    }
+    this.updateVisionOverlay(dt)
     this.composer.render()
     this.labelRenderer.render(this.scene, this.camera)
   }
@@ -1373,17 +1674,44 @@ export class IslandScene {
       // light of your own: during a blackout everyone carries a small lantern
       m.light.intensity = this.lightsOut * 2.2
       m.glow.material.opacity = 0.15 + this.lightsOut * 0.35
-      if (!c.target && !this.meeting && this.elapsed > c.nextWander && this.elapsed > c.busyUntil) {
+      const controlled = c.player.id === this.controlledId
+      if (!c.target && !this.meeting && !controlled && this.elapsed > c.nextWander && this.elapsed > c.busyUntil) {
         if (c.remote) c.target = c.remote.clone()
-        else if (!c.player.isMe) {
+        else if (c.player.wanders) {
           const a = rand(0, Math.PI * 2)
-          const r = rand(0.3, 1.3)
+          const r = rand(0.4, 2.2)
           c.target = this.clampWalkable(c.home.x + Math.cos(a) * r, c.home.y + Math.sin(a) * r)
         }
         c.nextWander = this.elapsed + rand(2.5, 6)
       }
       let moving = false
-      if (c.target) {
+      const turn = (dx: number, dz: number) => {
+        const want = Math.atan2(dx, dz)
+        let diff = want - c.heading
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff))
+        c.heading += diff * Math.min(1, dt * 12)
+      }
+      let ix = 0
+      let iz = 0
+      if (controlled && this.canMove && !this.meeting) {
+        for (const k of this.keys) {
+          const v = IslandScene.MOVE_KEYS[k]
+          if (v) {
+            ix += v[0]
+            iz += v[1]
+          }
+        }
+      }
+      if (ix || iz) {
+        c.target = null
+        const len = Math.hypot(ix, iz)
+        const next = this.clampWalkable(c.pos.x + (ix / len) * WALK_SPEED * dt, c.pos.y + (iz / len) * WALK_SPEED * dt)
+        if (next.distanceToSquared(c.pos) > 1e-8) {
+          moving = true
+          turn(ix, iz)
+          c.pos.copy(next)
+        }
+      } else if (c.target) {
         const d = new THREE.Vector2().subVectors(c.target, c.pos)
         const dist = d.length()
         if (dist < 0.05) {
@@ -1391,25 +1719,83 @@ export class IslandScene {
           c.nextWander = this.elapsed + rand(2, 5)
         } else {
           moving = true
-          const step = Math.min(dist, 1.8 * dt)
+          const speed = controlled ? WALK_SPEED : c.remote ? Math.max(WALK_SPEED * 1.15, dist * 5) : 1.6
           d.normalize()
-          c.pos.addScaledVector(d, step)
-          const want = Math.atan2(d.x, d.y)
-          let diff = want - c.heading
-          diff = Math.atan2(Math.sin(diff), Math.cos(diff))
-          c.heading += diff * Math.min(1, dt * 10)
+          const next = this.clampWalkable(c.pos.x + d.x * Math.min(dist, speed * dt), c.pos.y + d.y * Math.min(dist, speed * dt))
+          // Stuck against a wall: give up on this target instead of pushing forever.
+          if (next.distanceToSquared(c.pos) < 1e-7) c.target = null
+          c.pos.copy(next)
+          turn(d.x, d.y)
         }
       }
+      if (c.route && !controlled && !this.meeting) {
+        const p = routePos(c.route, this.clockFn(), { x: c.pos.x, z: c.pos.y })
+        const dx = p.x - c.pos.x
+        const dz = p.z - c.pos.y
+        const d = Math.hypot(dx, dz)
+        if (d > 3) c.pos.set(p.x, p.z)
+        else if (d > 0.002) {
+          moving = true
+          turn(dx, dz)
+          c.pos.set(p.x, p.z)
+        }
+        c.target = null
+      }
+      if (controlled && moving) this.opts.onMyMove?.(c.pos.x, c.pos.y)
       c.walkPhase += dt * (moving ? 14 : 2)
-      const ground = terrainH(c.pos.x, c.pos.y)
-      const hop = moving ? Math.abs(Math.sin(c.walkPhase)) * 0.06 : Math.sin(c.walkPhase) * 0.01
+      const ground = terrainH(c.pos.x, c.pos.y) + (c.ghost ? 0.35 + Math.sin(t * 1.6 + c.walkPhase * 0.1) * 0.08 : 0)
+      const hop = c.ghost ? 0 : moving ? Math.abs(Math.sin(c.walkPhase)) * 0.06 : Math.sin(c.walkPhase) * 0.01
       m.root.position.set(c.pos.x, ground + hop, c.pos.y)
       m.root.rotation.set(0, c.heading, moving ? Math.sin(c.walkPhase) * 0.08 : 0)
       m.feet[0].position.z = 0.03 + (moving ? Math.sin(c.walkPhase) * 0.06 : 0)
       m.feet[1].position.z = 0.03 - (moving ? Math.sin(c.walkPhase) * 0.06 : 0)
       m.sprout.rotation.z = Math.sin(t * 2.4 + c.walkPhase * 0.3) * 0.15
       m.body.scale.y = 0.95 + Math.sin(t * 2 + c.walkPhase * 0.2) * 0.02
+      if (!controlled) {
+        const seen = this.canSee(c)
+        if (m.root.visible !== seen) {
+          m.root.visible = seen
+          c.label.visible = seen
+        }
+      }
     }
+  }
+
+  private canSee(c: Character): boolean {
+    if (this.visionR === null || this.meeting || this.camMode !== 'follow') return true
+    const me = this.controlledId ? this.characters.get(this.controlledId) : null
+    if (!me) return true
+    return me.pos.distanceTo(c.pos) <= this.visionR + 0.25
+  }
+
+  /** Put the vision circle's on-screen size into CSS variables on the overlay. */
+  private updateVisionOverlay(dt: number) {
+    const el = this.visionEl
+    if (!el) return
+    const me = this.controlledId ? this.characters.get(this.controlledId) : null
+    const w = this.renderer.domElement.clientWidth || 1
+    const h = this.renderer.domElement.clientHeight || 1
+    let rx = w * 1.5
+    let ry = h * 1.5
+    let cx = w / 2
+    let cy = h / 2
+    if (me && this.visionR !== null && this.camMode === 'follow' && !this.meeting) {
+      const ground = terrainH(me.pos.x, me.pos.y) + 0.3
+      const c = this.island.localToWorld(new THREE.Vector3(me.pos.x, ground, me.pos.y)).project(this.camera)
+      const ex = this.island.localToWorld(new THREE.Vector3(me.pos.x + this.visionR, ground, me.pos.y)).project(this.camera)
+      const ez = this.island.localToWorld(new THREE.Vector3(me.pos.x, ground, me.pos.y - this.visionR)).project(this.camera)
+      cx = ((c.x + 1) / 2) * w
+      cy = ((1 - c.y) / 2) * h
+      rx = Math.abs(((ex.x + 1) / 2) * w - cx)
+      ry = Math.abs(((1 - ez.y) / 2) * h - cy)
+    }
+    const k = Math.min(1, dt * 4)
+    this.visionShown.rx += (rx - this.visionShown.rx) * k
+    this.visionShown.ry += (ry - this.visionShown.ry) * k
+    el.style.setProperty('--cx', `${cx.toFixed(1)}px`)
+    el.style.setProperty('--cy', `${cy.toFixed(1)}px`)
+    el.style.setProperty('--rx', `${this.visionShown.rx.toFixed(1)}px`)
+    el.style.setProperty('--ry', `${this.visionShown.ry.toFixed(1)}px`)
   }
 
   /** Smoothstep re-export for HUD helpers that want the same easing. */

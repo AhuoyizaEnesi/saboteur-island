@@ -131,3 +131,45 @@ test('API status page shows local retry after first-load API failure', async ({ 
   await expect.poll(() => requestCount).toBeGreaterThan(requestsAfterFailure)
   expect(user.page.url()).toBe(urlAfterFailure)
 })
+
+/**
+ * Saboteur Island, end to end with two real accounts: one creates a game, the
+ * other joins with the invite link, both get a secret role, one rings the bell,
+ * and a vote cast in one browser shows up in the other.
+ */
+test('two players: join, private roles, bell meeting, votes sync', async ({ users }) => {
+  test.setTimeout(180_000)
+  const [a, b] = await users(2)
+
+  await a.page.goto('/play')
+  await a.page.getByRole('button', { name: 'Create a game' }).click()
+  await a.page.waitForURL(/\/g\/[A-Z]{4}$/, { timeout: 30_000 })
+  const code = a.page.url().split('/').pop() as string
+
+  // The invite link joins the lobby on its own.
+  await b.page.goto(`/g/${code}`)
+  await expect(a.page.locator('.si-seat.filled')).toHaveCount(2, { timeout: 20_000 })
+  await expect(b.page.locator('.si-seat.filled')).toHaveCount(2, { timeout: 20_000 })
+
+  // Only the host can start; AI players fill the empty seats.
+  await expect(b.page.getByText('Waiting for the host to start')).toBeVisible()
+  await a.page.getByRole('button', { name: 'Start the game' }).click()
+
+  // Each browser sees only its own role.
+  for (const u of [a, b]) await expect(u.page.locator('.si-big')).toHaveText(/^(CREW|THE IMPOSTOR)$/, { timeout: 20_000 })
+  for (const u of [a, b]) await expect(u.page.getByText('Night falls in')).toBeVisible({ timeout: 20_000 })
+  await expect(a.page.locator('.si-players .p')).toHaveCount(5)
+
+  // Everyone starts next to the bell. It unlocks a few seconds into the game.
+  const bell = a.page.getByRole('button', { name: 'Ring the bell' })
+  await expect(bell).toBeEnabled({ timeout: 30_000 })
+  await bell.click()
+  for (const u of [a, b]) await expect(u.page.locator('.si-meeting')).toBeVisible({ timeout: 20_000 })
+
+  // Discussion, then voting. A vote cast by A shows as "voted" in B's browser.
+  const myName = (await a.page.locator('.si-players .p', { hasText: 'You' }).locator('.nm').textContent())?.trim() as string
+  const skip = a.page.getByRole('button', { name: 'Skip vote' })
+  await expect(skip).toBeVisible({ timeout: 70_000 })
+  await skip.click()
+  await expect(b.page.locator('.si-vote', { hasText: myName }).locator('.voted')).toBeVisible({ timeout: 20_000 })
+})

@@ -44,3 +44,35 @@
   --color-shell: #fafafa;
   --color-shell-panel: #ffffff;
 }
+
+/* Island at night — Saboteur Island's own theme. Deep navy sky, cyan for the
+ * crew and for safe actions, coral red for the Impostor and danger, gold for
+ * tasks. Every HUD color in src/game/game.css reads these tokens. */
+[data-theme="island"] {
+  color-scheme: dark;
+  --color-background: #070b1c;
+  --color-foreground: #ece9ff;
+  --color-card: #0f1530;
+  --color-card-foreground: #ece9ff;
+  --color-popover: #111833;
+  --color-popover-foreground: #ece9ff;
+  --color-primary: #7cf7ff;
+  --color-primary-foreground: #06101f;
+  --color-secondary: #16203f;
+  --color-secondary-foreground: #ece9ff;
+  --color-muted: #141c38;
+  --color-muted-foreground: #a9a3d6;
+  --color-accent: #1b2547;
+  --color-accent-foreground: #ece9ff;
+  --color-destructive: #ff4d6d;
+  --color-destructive-foreground: #ffffff;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-input: rgba(255, 255, 255, 0.14);
+  --color-ring: #7cf7ff;
+  --color-gold: #ffd166;
+  --radius: 0.85rem;
+  --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 4px 16px 0 rgba(0, 0, 0, 0.4);
+  --color-shell: #070b1c;
+  --color-shell-panel: #0f1530;
+}

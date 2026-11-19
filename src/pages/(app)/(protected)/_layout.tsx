@@ -32,13 +32,13 @@ function SignedOutPanel() {
 
   return (
     <div className="si-menu">
-      <div className="si-card" style={{ width: 'min(420px, 100%)', padding: 28, textAlign: 'center', background: 'rgba(16,13,40,.75)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 22 }}>
-        <div className="si-title" style={{ fontSize: 22 }}>SABOTEUR ISLAND</div>
-        <p className="si-small" style={{ margin: '12px 0 18px' }}>Sign in so the game knows who you are. Your role stays secret from everyone else.</p>
+      <div className="si-signin">
+        <div className="si-title">SABOTEUR ISLAND</div>
+        <p className="si-small">Sign in so the game knows who you are. Your role and your tasks stay secret from everyone else.</p>
         <Button className="w-full" onClick={() => setShowAuthModal(true)}>
           Sign in to play
         </Button>
-        <Link to="/" className="si-small" style={{ display: 'inline-block', marginTop: 14 }}>
+        <Link to="/" className="si-small">
           Back to the island
         </Link>
       </div>

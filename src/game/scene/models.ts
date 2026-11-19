@@ -8,7 +8,7 @@ import * as THREE from 'three'
 import type { BuildType } from '../catalog'
 import { Fx, pick, rand } from './fx'
 
-type Builder = (fx: Fx, o: { color?: string }) => THREE.Group
+type Builder = (fx: Fx, o: { color?: string; roof?: string }) => THREE.Group
 
 const GREENS = ['#2f8f4e', '#3aa35a', '#2a7d47', '#47b36a']
 
@@ -27,7 +27,7 @@ const MODELS: Record<BuildType, Builder> = {
   house: (fx, o) => {
     const g = new THREE.Group()
     const wall = o.color || pick(['#f4e8d4', '#ead0a8', '#d9e8f4', '#f5dad3', '#e4f1d9'])
-    const roof = pick(['#c9534a', '#4073bd', '#4f8a4a', '#7b4cb3', '#bf7a3a'])
+    const roof = o.roof || pick(['#c9534a', '#4073bd', '#4f8a4a', '#7b4cb3', '#bf7a3a'])
     const w = 0.82
     const d = 0.7
     const h = 0.56
@@ -341,11 +341,192 @@ const MODELS: Record<BuildType, Builder> = {
     g.add(fx.mesh(new THREE.SphereGeometry(0.04, 6, 4), fx.mat('#ff7ad9'), 0, 0.9, 0))
     return g
   },
+  bird: (fx, o) => {
+    const g = new THREE.Group()
+    const body = fx.mat(o.color || pick(['#ffd23f', '#e0473f', '#3f7fe0', '#4caf50']), { roughness: 0.5 })
+    const b = fx.mesh(new THREE.SphereGeometry(0.1, 10, 8), body, 0, 0.1, 0)
+    b.scale.set(1.25, 0.95, 1)
+    g.add(b)
+    g.add(fx.mesh(new THREE.SphereGeometry(0.07, 10, 8), body, 0.08, 0.2, 0))
+    const beak = fx.mesh(new THREE.ConeGeometry(0.025, 0.07, 5), fx.mat('#ff8a1f'), 0.16, 0.2, 0)
+    beak.rotation.z = -Math.PI / 2
+    g.add(beak)
+    for (const z of [0.035, -0.035]) g.add(fx.mesh(new THREE.SphereGeometry(0.012, 6, 4), fx.mat('#151320'), 0.13, 0.23, z))
+    const tail = fx.mesh(new THREE.BoxGeometry(0.08, 0.02, 0.06), body, -0.13, 0.15, 0)
+    tail.rotation.z = 0.5
+    g.add(tail)
+    for (const s of [1, -1]) {
+      const wing = fx.mesh(new THREE.SphereGeometry(0.05, 6, 4), body, -0.01, 0.12, s * 0.09)
+      wing.scale.set(1.3, 0.5, 0.35)
+      g.add(wing)
+    }
+    fx.floaters.push({ root: g, obj: b, amp: 0.008, speed: 3, phase: rand(0, 6) })
+    return g
+  },
+  bench: (fx, o) => {
+    const g = new THREE.Group()
+    const wood = fx.mat(o.color || '#a8774e')
+    const iron = fx.mat('#2e2a3d')
+    for (let i = 0; i < 3; i++) g.add(fx.mesh(new THREE.BoxGeometry(0.7, 0.03, 0.06), wood, 0, 0.2, -0.07 + i * 0.07))
+    for (let i = 0; i < 2; i++) g.add(fx.mesh(new THREE.BoxGeometry(0.7, 0.06, 0.025), wood, 0, 0.32 + i * 0.08, -0.12))
+    for (const x of [-0.3, 0.3]) {
+      g.add(fx.mesh(new THREE.BoxGeometry(0.03, 0.2, 0.2), iron, x, 0.1, -0.02))
+      g.add(fx.mesh(new THREE.BoxGeometry(0.03, 0.24, 0.03), iron, x, 0.32, -0.13))
+    }
+    return g
+  },
+  scarecrow: (fx, o) => {
+    const g = new THREE.Group()
+    const pole = fx.mat('#6b4a32')
+    g.add(fx.mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.9, 6), pole, 0, 0.45, 0))
+    g.add(fx.mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.62, 6), pole, 0, 0.66, 0).rotateZ(Math.PI / 2))
+    g.add(fx.mesh(new THREE.BoxGeometry(0.22, 0.26, 0.12), fx.mat(o.color || pick(['#3f7fe0', '#e0473f', '#4caf50'])), 0, 0.6, 0))
+    g.add(fx.mesh(new THREE.SphereGeometry(0.09, 8, 6), fx.mat('#e9d8a2'), 0, 0.83, 0))
+    g.add(fx.mesh(new THREE.CylinderGeometry(0.06, 0.16, 0.1, 10), fx.mat('#d9b54a'), 0, 0.93, 0))
+    for (const s of [1, -1]) g.add(fx.mesh(new THREE.ConeGeometry(0.03, 0.1, 4), fx.mat('#e8c75a'), s * 0.32, 0.64, 0).rotateZ((s * Math.PI) / 2))
+    return g
+  },
+  flag: (fx, o) => {
+    const g = new THREE.Group()
+    g.add(fx.mesh(new THREE.CylinderGeometry(0.02, 0.025, 1.3, 6), fx.mat('#e8e4f0', { metalness: 0.4, roughness: 0.4 }), 0, 0.65, 0))
+    g.add(fx.mesh(new THREE.SphereGeometry(0.035, 8, 6), fx.mat('#ffd166'), 0, 1.32, 0))
+    const fg = new THREE.PlaneGeometry(0.5, 0.3, 8, 3)
+    fg.translate(0.25, 0, 0)
+    const flag = new THREE.Mesh(fg, new THREE.MeshStandardMaterial({ color: o.color || pick(['#e0473f', '#3f7fe0', '#ffd23f']), side: THREE.DoubleSide, roughness: 0.8, flatShading: true }))
+    flag.position.set(0.02, 1.12, 0)
+    flag.castShadow = true
+    g.add(flag)
+    fx.wavers.push({ root: g, geo: fg, base: (fg.attributes.position.array as Float32Array).slice() })
+    return g
+  },
+  beehive: (fx, o) => {
+    const g = new THREE.Group()
+    g.add(fx.mesh(new THREE.BoxGeometry(0.34, 0.06, 0.34), fx.mat('#6b4a32'), 0, 0.12, 0))
+    for (const [x, z] of [[-0.13, -0.13], [0.13, -0.13], [-0.13, 0.13], [0.13, 0.13]]) g.add(fx.mesh(new THREE.BoxGeometry(0.04, 0.12, 0.04), fx.mat('#6b4a32'), x, 0.06, z))
+    const box = fx.mat(o.color || '#f2c14e')
+    g.add(fx.mesh(new THREE.BoxGeometry(0.3, 0.14, 0.3), box, 0, 0.22, 0))
+    g.add(fx.mesh(new THREE.BoxGeometry(0.3, 0.14, 0.3), fx.mat('#e6ad34'), 0, 0.36, 0))
+    g.add(fx.mesh(new THREE.BoxGeometry(0.36, 0.04, 0.36), fx.mat('#c9534a'), 0, 0.45, 0))
+    g.add(fx.mesh(new THREE.BoxGeometry(0.1, 0.02, 0.02), fx.mat('#2e2a3d'), 0, 0.17, 0.155))
+    for (let i = 0; i < 4; i++) {
+      const bee = fx.mesh(new THREE.SphereGeometry(0.018, 6, 4), fx.mat('#1f1b2a', { emissive: '#ffd23f', emissiveIntensity: 0.4 }), rand(-0.25, 0.25), rand(0.4, 0.7), rand(-0.25, 0.25))
+      bee.castShadow = false
+      g.add(bee)
+      fx.floaters.push({ root: g, obj: bee, amp: 0.06, speed: rand(3, 6), phase: rand(0, 6), spin: 0 })
+    }
+    return g
+  },
 }
 
-export function buildModel(fx: Fx, type: string, color?: string): THREE.Group {
+/** Darken a model to show it was painted over (a wrecked task). */
+export function paintOver(root: THREE.Object3D, color: string) {
+  const c = new THREE.Color(color)
+  root.traverse((o) => {
+    const m = o as THREE.Mesh
+    if (!m.isMesh || !m.material || Array.isArray(m.material)) return
+    const mat = (m.material as THREE.MeshStandardMaterial).clone()
+    if ('color' in mat && mat.color) mat.color.lerp(c, 0.82)
+    if ('emissiveIntensity' in mat) mat.emissiveIntensity = 0
+    m.material = mat
+  })
+}
+
+export function buildModel(fx: Fx, type: string, color?: string, roof?: string): THREE.Group {
   const make = (MODELS as Record<string, Builder>)[type] ?? MODELS.rock
-  return make(fx, { color })
+  return make(fx, { color, roof })
+}
+
+/** A small wooden signpost; landmarks without a big building get one. */
+function signpost(fx: Fx, board: string): THREE.Group {
+  const g = new THREE.Group()
+  g.add(fx.mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.7, 6), fx.mat('#6b4a32'), 0, 0.35, 0))
+  g.add(fx.mesh(new THREE.BoxGeometry(0.46, 0.2, 0.04), fx.mat(board), 0, 0.6, 0.02))
+  return g
+}
+
+/** The shed where the lights are fixed. Its panel glows, and blinks red during a blackout. */
+function buildPowerShed(fx: Fx): { group: THREE.Group; panel: THREE.MeshStandardMaterial } {
+  const g = new THREE.Group()
+  const w = 1.1
+  const d = 0.85
+  const h = 0.75
+  g.add(fx.mesh(new THREE.BoxGeometry(w, h, d), fx.mat('#9aa6b5'), 0, h / 2, 0))
+  const roof = fx.mesh(new THREE.BoxGeometry(w + 0.16, 0.06, d + 0.2), fx.mat('#56607a'), 0, h + 0.06, 0)
+  roof.rotation.x = -0.12
+  g.add(roof)
+  g.add(fx.mesh(new THREE.BoxGeometry(0.28, 0.48, 0.03), fx.mat('#2e2a3d'), -0.22, 0.24, d / 2 + 0.01))
+  const panel = new THREE.MeshStandardMaterial({ color: '#ffd166', emissive: '#ffb020', emissiveIntensity: 0.9, roughness: 0.4 })
+  const p = fx.mesh(new THREE.BoxGeometry(0.3, 0.3, 0.03), panel, 0.24, 0.42, d / 2 + 0.015)
+  p.castShadow = false
+  g.add(p)
+  // a zigzag bolt on the panel
+  const bolt = new THREE.Shape()
+  bolt.moveTo(0.02, 0.11)
+  bolt.lineTo(-0.06, -0.01)
+  bolt.lineTo(0.0, -0.01)
+  bolt.lineTo(-0.03, -0.11)
+  bolt.lineTo(0.07, 0.02)
+  bolt.lineTo(0.01, 0.02)
+  bolt.closePath()
+  g.add(fx.mesh(new THREE.ShapeGeometry(bolt), fx.mat('#2e2a3d'), 0.24, 0.42, d / 2 + 0.035))
+  g.add(fx.mesh(new THREE.CylinderGeometry(0.035, 0.045, 1.6, 6), fx.mat('#6b4a32'), w / 2 + 0.3, 0.8, -0.2))
+  g.add(fx.mesh(new THREE.BoxGeometry(0.36, 0.04, 0.04), fx.mat('#6b4a32'), w / 2 + 0.3, 1.5, -0.2))
+  fx.halo(g, '#ffc85a', 0.7, 0.42, 0.25, 0.2)
+  return { group: g, panel }
+}
+
+/** The fixed buildings and markers at each landmark. The bell is built separately. */
+export function buildLandmark(fx: Fx, id: string): { group: THREE.Group; panel?: THREE.MeshStandardMaterial } {
+  const scaled = (type: string, s: number, color?: string, roof?: string) => {
+    const g = buildModel(fx, type, color, roof)
+    g.scale.multiplyScalar(s)
+    return g
+  }
+  switch (id) {
+    case 'red_cottage':
+      return { group: scaled('house', 1.5, '#f4e8d4', '#c9534a') }
+    case 'blue_cottage':
+      return { group: scaled('house', 1.5, '#e8eef6', '#3f6fc0') }
+    case 'well':
+      return { group: scaled('well', 1.5) }
+    case 'windmill':
+      return { group: scaled('windmill', 1.5) }
+    case 'lighthouse':
+      return { group: scaled('lighthouse', 1.45) }
+    case 'dock':
+      return { group: scaled('dock', 1.35) }
+    case 'power_shed':
+      return buildPowerShed(fx)
+    case 'camp': {
+      const g = new THREE.Group()
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.4
+        const log = fx.mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.5, 6), fx.mat('#7a5236'), Math.cos(a) * 0.95, 0.07, Math.sin(a) * 0.95)
+        log.rotation.z = Math.PI / 2
+        log.rotation.y = -a + Math.PI / 2
+        g.add(log)
+      }
+      const sign = signpost(fx, '#c08a5a')
+      sign.position.set(-1.25, 0, -0.6)
+      g.add(sign)
+      return { group: g }
+    }
+    case 'orchard': {
+      const g = new THREE.Group()
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2
+        g.add(fx.mesh(new THREE.DodecahedronGeometry(rand(0.06, 0.1), 0), fx.mat('#9b98a8'), Math.cos(a) * 1.5, 0.04, Math.sin(a) * 1.5))
+      }
+      const stump = fx.mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.18, 8), fx.mat('#7a5236'), 0, 0.09, 0)
+      g.add(stump)
+      const sign = signpost(fx, '#5c9e4f')
+      sign.position.set(1.8, 0, 0.4)
+      g.add(sign)
+      return { group: g }
+    }
+    default:
+      return { group: new THREE.Group() }
+  }
 }
 
 /** Stone table and the emergency bell at the meeting spot. */

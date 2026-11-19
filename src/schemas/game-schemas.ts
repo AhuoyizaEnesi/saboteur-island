@@ -2,12 +2,15 @@
  * Game collections.
  *
  * Every write goes through a server action in src/actions/game.ts, which runs
- * with RBAC off and checks phase, turn and role itself. So browsers get read
- * access only: no role can create, update or delete game rows directly.
+ * with RBAC off and checks phase, range, cooldowns and role itself. So
+ * browsers get read access only: no role can create, update or delete game
+ * rows directly.
  *
- * The one private collection is `secrets`. Its owner column is the player's
- * user id and every role reads only its own rows, so the server, not the UI,
- * keeps each player's role hidden from everyone else.
+ * Private collections:
+ * - `secrets` and `tasks` use the player's user id as owner, and every role
+ *   reads only its own rows. The server, not the UI, keeps roles and task
+ *   lists hidden from everyone else.
+ * - `clues` is readable by nobody. Only server actions (RBAC off) touch it.
  */
 
 import type { CollectionSchema, ColumnDefinition, RolePermissions } from 'deepspace/schema'
@@ -23,7 +26,10 @@ const json = (name: string): ColumnDefinition => ({ name, storage: 'text', inter
 
 const READ_ONLY: RolePermissions = { read: true, create: false, update: false, delete: false }
 const READ_OWN: RolePermissions = { read: 'own', create: false, update: false, delete: false }
+const NONE: RolePermissions = { read: false, create: false, update: false, delete: false }
 const publicRead = { '*': READ_ONLY, anonymous: READ_ONLY, viewer: READ_ONLY, member: READ_ONLY, admin: READ_ONLY }
+const ownRead = { '*': READ_OWN, anonymous: READ_OWN, viewer: READ_OWN, member: READ_OWN, admin: READ_OWN }
+const serverOnly = { '*': NONE, anonymous: NONE, viewer: NONE, member: NONE, admin: NONE }
 
 export const gamesSchema: CollectionSchema = {
   name: 'games',
@@ -31,21 +37,24 @@ export const gamesSchema: CollectionSchema = {
     text('code', 8),
     text('hostId'),
     text('phase'),
-    num('round'),
     num('phaseEndsAt'),
-    num('buildMsLeft'),
+    num('nightAt'),
+    num('playMsLeft'),
+    num('tasksDone'),
+    num('tasksTotal'),
     text('timeOfDay'),
     text('weather'),
     num('lightsOutUntil'),
+    num('bellLockUntil'),
     num('meetingNo'),
     text('meetingCalledBy'),
-    num('finalMeeting'),
+    text('meetingReason'),
+    text('meetingWhere'),
     text('ejectedId'),
     num('ejectedWasImpostor'),
     text('winner'),
     text('winReason', 300),
     json('reveal'),
-    json('botPlan'),
     json('botVotes'),
     text('nextCode', 8),
     num('seed'),
@@ -63,9 +72,13 @@ export const playersSchema: CollectionSchema = {
     num('seat'),
     num('isBot'),
     num('alive'),
-    num('ordersLeft'),
-    num('meetingsLeft'),
+    num('bellsLeft'),
     num('lastActiveAt'),
+    // Last position checkpoint the browser sent, used for range checks.
+    num('x'),
+    num('z'),
+    num('posAt'),
+    num('lastOrderAt'),
   ],
   uniqueOn: ['gameId', 'userId'],
   permissions: publicRead,
@@ -78,25 +91,27 @@ export const secretsSchema: CollectionSchema = {
     text('playerId'),
     text('ownerUserId'),
     text('role'),
-    text('themeId'),
-    num('sabotagesUsed'),
+    json('fakeTasks'),
+    num('wreckReadyAt'),
+    num('lightsReadyAt'),
   ],
   ownerField: 'ownerUserId',
-  permissions: { '*': READ_OWN, anonymous: READ_OWN, viewer: READ_OWN, member: READ_OWN, admin: READ_OWN },
+  permissions: ownRead,
 }
 
-export const ordersSchema: CollectionSchema = {
-  name: 'orders',
+export const tasksSchema: CollectionSchema = {
+  name: 'tasks',
   columns: [
     text('gameId'),
     text('playerId'),
-    num('round'),
-    text('text', 200),
+    text('ownerUserId'),
+    text('templateId'),
+    text('landmarkId'),
     text('status'),
-    text('narration', 300),
-    num('at'),
+    num('doneAt'),
   ],
-  permissions: publicRead,
+  ownerField: 'ownerUserId',
+  permissions: ownRead,
 }
 
 export const buildsSchema: CollectionSchema = {
@@ -105,17 +120,39 @@ export const buildsSchema: CollectionSchema = {
     text('gameId'),
     text('orderId'),
     text('playerId'),
+    text('landmarkId'),
     text('type'),
     num('x'),
     num('z'),
+    num('lift'),
     num('rot'),
     num('scale'),
     text('color'),
-    num('round'),
+    text('colorName'),
+    text('state'),
     num('seq'),
     num('at'),
   ],
   permissions: publicRead,
+}
+
+export const breaksSchema: CollectionSchema = {
+  name: 'breaks',
+  columns: [text('gameId'), text('landmarkId'), num('x'), num('z'), num('at'), num('reported'), num('fixed')],
+  permissions: publicRead,
+}
+
+export const routesSchema: CollectionSchema = {
+  name: 'routes',
+  columns: [text('gameId'), text('playerId'), json('legs'), text('goal')],
+  uniqueOn: ['gameId', 'playerId'],
+  permissions: publicRead,
+}
+
+export const cluesSchema: CollectionSchema = {
+  name: 'clues',
+  columns: [text('gameId'), text('landmarkId'), num('at'), text('impostorId'), json('nearby'), json('witnesses')],
+  permissions: serverOnly,
 }
 
 export const votesSchema: CollectionSchema = {
@@ -141,8 +178,11 @@ export const gameSchemas: CollectionSchema[] = [
   gamesSchema,
   playersSchema,
   secretsSchema,
-  ordersSchema,
+  tasksSchema,
   buildsSchema,
+  breaksSchema,
+  routesSchema,
+  cluesSchema,
   votesSchema,
   chatSchema,
   eventsSchema,
