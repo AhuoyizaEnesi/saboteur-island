@@ -81,7 +81,7 @@ const MODELS: Record<BuildType, Builder> = {
     fx.halo(g, '#ffc46a', 0.6, 0.68, 0.02, 0.3)
     return g
   },
-  boat: (fx) => {
+  boat: (fx, o) => {
     const g = new THREE.Group()
     const hull = new THREE.Shape()
     hull.moveTo(-0.38, 0.12)
@@ -91,7 +91,7 @@ const MODELS: Record<BuildType, Builder> = {
     hull.closePath()
     const hg = new THREE.ExtrudeGeometry(hull, { depth: 0.26, bevelEnabled: false })
     hg.translate(0, 0, -0.13)
-    g.add(fx.mesh(hg, fx.mat('#8b5a3c')))
+    g.add(fx.mesh(hg, fx.mat(o.color || '#8b5a3c')))
     g.add(fx.mesh(new THREE.BoxGeometry(0.66, 0.02, 0.2), fx.mat('#c08a5a'), 0, 0.12, 0))
     g.add(fx.mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.62, 5), fx.mat('#5b3a27'), 0.02, 0.43, 0))
     const sail = new THREE.Shape()
@@ -133,7 +133,7 @@ const MODELS: Record<BuildType, Builder> = {
     fx.spinners.push({ root: g, obj: hub, axis: 'z', speed: 1.1 })
     return g
   },
-  campfire: (fx) => {
+  campfire: (fx, o) => {
     const g = new THREE.Group()
     for (let i = 0; i < 3; i++) {
       const l = fx.mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.42, 5), fx.mat('#6b4330'), 0, 0.05, 0)
@@ -145,14 +145,17 @@ const MODELS: Record<BuildType, Builder> = {
       const a = (i / 7) * Math.PI * 2
       g.add(fx.mesh(new THREE.DodecahedronGeometry(0.06, 0), fx.mat('#8d8a9c'), Math.cos(a) * 0.27, 0.03, Math.sin(a) * 0.27))
     }
-    const f1 = fx.mesh(new THREE.ConeGeometry(0.13, 0.38, 6), fx.FIRE, 0, 0.26, 0)
-    const f2 = fx.mesh(new THREE.ConeGeometry(0.08, 0.26, 5), fx.LAMP, 0.02, 0.2, 0.02)
+    // A colored campfire burns in that color; the default is a warm orange.
+    const flame = o.color ? fx.glowMat(o.color, 1.8, 1.0) : fx.FIRE
+    const core = o.color ? fx.glowMat(new THREE.Color(o.color).lerp(new THREE.Color('#ffffff'), 0.55).getStyle(), 0.45, 3.6) : fx.LAMP
+    const f1 = fx.mesh(new THREE.ConeGeometry(0.13, 0.38, 6), flame, 0, 0.26, 0)
+    const f2 = fx.mesh(new THREE.ConeGeometry(0.08, 0.26, 5), core, 0.02, 0.2, 0.02)
     f1.castShadow = false
     f2.castShadow = false
     g.add(f1, f2)
     fx.flickers.push({ root: g, obj: f1, phase: rand(0, 6) }, { root: g, obj: f2, phase: rand(0, 6) })
-    fx.groundGlow(g, '#ff8a3a', 2.4, 0.22, 0.38)
-    fx.halo(g, '#ff9a4a', 1.2, 0.3, 0.3, 0.3)
+    fx.groundGlow(g, o.color || '#ff8a3a', 2.4, 0.22, 0.38)
+    fx.halo(g, o.color || '#ff9a4a', 1.2, 0.3, 0.3, 0.3)
     fx.emitters.push({ root: g, offset: new THREE.Vector3(0, 0.5, 0), rate: 2.2, acc: 0, tint: new THREE.Color('#9a9aa8'), size: 0.5, alpha: 0.3, rise: 0.6 })
     return g
   },
@@ -194,16 +197,19 @@ const MODELS: Record<BuildType, Builder> = {
     g.add(fx.mesh(prism(0.64, 0.2, 0.4), fx.mat('#9a4a3a'), 0, 0.68, 0))
     return g
   },
-  fence: (fx) => {
+  fence: (fx, o) => {
     const g = new THREE.Group()
-    const wood = fx.mat('#a8774e')
+    const wood = fx.mat(o.color || '#a8774e')
     for (let i = 0; i < 5; i++) g.add(fx.mesh(new THREE.BoxGeometry(0.05, 0.3, 0.05), wood, -0.5 + i * 0.25, 0.15, 0))
     for (const y of [0.1, 0.22]) g.add(fx.mesh(new THREE.BoxGeometry(1.08, 0.04, 0.025), wood, 0, y, 0))
     return g
   },
-  flowers: (fx) => {
+  flowers: (fx, o) => {
     const g = new THREE.Group()
-    const cols = ['#ff6b9a', '#ffd166', '#c084fc', '#ffffff', '#ff8a5c', '#7cf7ff']
+    // A colored bed is all one color with a little variation; otherwise a mix.
+    const cols = o.color
+      ? [o.color, new THREE.Color(o.color).lerp(new THREE.Color('#ffffff'), 0.25).getStyle(), new THREE.Color(o.color).multiplyScalar(0.85).getStyle()]
+      : ['#ff6b9a', '#ffd166', '#c084fc', '#ffffff', '#ff8a5c', '#7cf7ff']
     for (let i = 0; i < 9; i++) {
       const x = rand(-0.25, 0.25)
       const z = rand(-0.25, 0.25)

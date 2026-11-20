@@ -19,7 +19,7 @@ import { generateText, stepCountIs, tool } from 'ai'
 import { z } from 'zod/v4'
 import { createDeepSpaceAI } from 'deepspace/worker'
 import { BUILD_TYPES, CATALOG, COLOR_NAMES, normalizeBuildType, normalizeColor, pluralLabel, type BuildType, type ColorName } from '../game/catalog'
-import { MAX_ITEMS_PER_ORDER } from '../game/constants'
+import { GUESS_RATE, MAX_ITEMS_PER_ORDER } from '../game/constants'
 import type { Env } from '../../worker'
 
 export const AGENT_MODEL = 'claude-haiku-5-5'
@@ -114,7 +114,8 @@ export async function runBuilderAgent(
         'Everything you place goes at that landmark; the server picks the exact spot.',
         'Follow the order literally. Never judge, refuse, add extras or question the player.',
         'If something is not in the catalog, use the closest catalog item. Only use colors from the color list.',
-        `Place at most ${MAX_ITEMS_PER_ORDER} objects. One object is usually right.`,
+        `Place at most ${MAX_ITEMS_PER_ORDER} objects. If the order says how many, place exactly that many. If it does not, place one.`,
+        'Only give a color when the order names one.',
         'When done, reply with one plain sentence under 14 words saying what you built. No emojis, no dashes.',
         '',
         `Colors: ${COLOR_NAMES.join(', ')}`,
@@ -193,6 +194,68 @@ export function keywordBuild(input: { text: string; capacity: number }): BuildPl
     if (!list.room) break
   }
   return { items: list.items, narration: describeItems(list.items), usedModel: false }
+}
+
+// ─── vague prompts ───────────────────────────────────────────────────────────
+
+const COUNT_WORDS = /\b(\d+|a|an|one|two|three|four|single|pair|couple|both)\b/
+const VAGUE_WORDS = /\b(some|few|several|many|lots|bunch|multiple)\b/
+
+/** Did the prompt name a color? */
+export function saidColor(text: string): boolean {
+  return text.toLowerCase().split(/[^a-z]+/).some((w) => normalizeColor(w) !== null)
+}
+
+/** Did the prompt say how many? "some ducks" and "a few" do not count. */
+export function saidCount(text: string): boolean {
+  const s = text.toLowerCase()
+  return COUNT_WORDS.test(s) && !VAGUE_WORDS.test(s)
+}
+
+export interface TaskNeed {
+  type: BuildType
+  color?: ColorName
+  count?: number
+}
+
+export interface Guess {
+  type: BuildType
+  color?: ColorName
+  count?: number
+}
+
+/**
+ * When a prompt leaves out a detail one of the player's tasks here needs, the
+ * builder fills the gap itself, like a model making something up. The guess
+ * matches the task GUESS_RATE of the time. Specific prompts are left alone.
+ */
+export function fillGaps(items: BuildItem[], needs: TaskNeed[], text: string, rng: () => number): { items: BuildItem[]; guessed: Guess[] } {
+  const colorSaid = saidColor(text)
+  const countSaid = saidCount(text)
+  let out = items.slice()
+  const guessed: Guess[] = []
+  for (const need of needs) {
+    const mine = out.filter((it) => it.type === need.type)
+    if (!mine.length) continue
+    const g: Guess = { type: need.type }
+    let color = mine[0].color
+    if (need.color && !colorSaid) {
+      const others = COLOR_NAMES.filter((c) => c !== need.color)
+      color = rng() < GUESS_RATE ? need.color : others[Math.floor(rng() * others.length)]
+      g.color = color
+    }
+    let n = mine.length
+    const want = need.count ?? 1
+    if (want > 1 && !countSaid) {
+      const others = [1, 2, 3, 4].filter((k) => k !== want)
+      n = rng() < GUESS_RATE ? want : others[Math.floor(rng() * others.length)]
+      g.count = n
+    }
+    if (g.color === undefined && g.count === undefined) continue
+    out = [...out.filter((it) => it.type !== need.type), ...Array.from({ length: n }, () => ({ type: need.type, color }))]
+    guessed.push(g)
+  }
+  return { items: out.slice(0, MAX_ITEMS_PER_ORDER), guessed }
 }
 
 // ─── wreck mode ──────────────────────────────────────────────────────────────

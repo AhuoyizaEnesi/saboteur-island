@@ -12,7 +12,7 @@ import { landmarkById } from '../game/landmarks'
 import { makeRng } from '../game/placement'
 import { assignRoles } from '../game/rules'
 import { taskTemplate } from '../game/tasks'
-import { INTRO_MS, MEETING_MS, VOTE_MS, EJECT_MS, PLAY_MS } from '../game/constants'
+import { BUILD_MS, INTRO_MS, MEETING_MS, VOTE_MS, EJECT_MS, PLAY_MS, WRECK_MS } from '../game/constants'
 
 type Rec = { recordId: string; data: Record<string, unknown>; createdAt: string }
 
@@ -117,6 +117,22 @@ async function walk(t: ReturnType<typeof fakeTools>, gameId: string, userId: str
   }
 }
 
+/** A build: start it, stand still for BUILD_MS, finish it. */
+async function build(t: ReturnType<typeof fakeTools>, gameId: string, userId: string, landmarkId: string, text: string) {
+  const start = await call(t.tools, 'game-build', userId, { gameId, landmarkId, text })
+  if (!start.success || !start.data?.pending) return start
+  advance(BUILD_MS)
+  return call(t.tools, 'game-build-finish', userId, { gameId })
+}
+
+/** A wreck: start it, stand still for WRECK_MS, finish it. */
+async function wreckIt(t: ReturnType<typeof fakeTools>, gameId: string, userId: string, landmarkId: string, kind: string) {
+  const start = await call(t.tools, 'game-wreck', userId, { gameId, landmarkId, kind })
+  if (!start.success) return start
+  advance(WRECK_MS)
+  return call(t.tools, 'game-wreck-finish', userId, { gameId })
+}
+
 describe('a full game through the server actions', () => {
   it('fills seats with AI players and deals one Impostor, private roles and 3 tasks each', async () => {
     const { t, gameId, players } = await setup(2)
@@ -141,9 +157,17 @@ describe('a full game through the server actions', () => {
     const stand = { x: lm.x + (0 - lm.x) * (1.6 / Math.hypot(lm.x, lm.z)), z: lm.z + (0 - lm.z) * (1.6 / Math.hypot(lm.x, lm.z)) }
     await walk(t, gameId, 'u1', stand)
     advance(5000)
-    const r = await call(t.tools, 'game-build', 'u1', { gameId, landmarkId: lm.id, text: tpl.order })
+    // The build takes time: finishing straight away is refused.
+    const started = await call(t.tools, 'game-build', 'u1', { gameId, landmarkId: lm.id, text: tpl.order })
+    expect(started.success, started.error).toBe(true)
+    expect(started.data?.pending).toBe(true)
+    expect(rowsOf(t, 'builds', { gameId, playerId: me.recordId })).toHaveLength(0)
+    expect((await call(t.tools, 'game-build-finish', 'u1', { gameId })).error).toMatch(/Still building/)
+    advance(BUILD_MS)
+    const r = await call(t.tools, 'game-build-finish', 'u1', { gameId })
     expect(r.success, r.error).toBe(true)
     expect(r.data?.completed).toContain(tpl.id)
+    expect(rowsOf(t, 'builds', { gameId, playerId: me.recordId })).toHaveLength(tpl.need.count ?? 1)
     expect(rowsOf(t, 'tasks', { gameId, playerId: me.recordId }).find((x) => x.recordId === task.recordId)?.data.status).toBe('done')
     expect(rowsOf(t, 'games')[0].data.tasksDone).toBeGreaterThanOrEqual(1)
   })
@@ -156,7 +180,7 @@ describe('a full game through the server actions', () => {
     const lm = landmarkById(tpl.landmarkId)!
     const stand = { x: lm.x * (1 - 1.6 / Math.hypot(lm.x, lm.z)), z: lm.z * (1 - 1.6 / Math.hypot(lm.x, lm.z)) }
     await walk(t, gameId, 'u1', stand)
-    expect((await call(t.tools, 'game-build', 'u1', { gameId, landmarkId: lm.id, text: tpl.order })).success).toBe(true)
+    expect((await build(t, gameId, 'u1', lm.id, tpl.order)).success).toBe(true)
     const doneBefore = rowsOf(t, 'games')[0].data.tasksDone as number
 
     // Crew cannot wreck.
@@ -164,7 +188,7 @@ describe('a full game through the server actions', () => {
     // The Impostor walks over and knocks it over.
     await walk(t, gameId, 'u2', stand)
     advance(25_000)
-    const w = await call(t.tools, 'game-wreck', 'u2', { gameId, landmarkId: lm.id, kind: 'knock' })
+    const w = await wreckIt(t, gameId, 'u2', lm.id, 'knock')
     expect(w.success, w.error).toBe(true)
     expect(rowsOf(t, 'tasks', { gameId }).find((x) => x.recordId === task.recordId)?.data.status).toBe('broken')
     expect(rowsOf(t, 'games')[0].data.tasksDone).toBe(doneBefore - 1)
@@ -177,7 +201,7 @@ describe('a full game through the server actions', () => {
 
     // The owner redoes it; it counts again and the smoke is marked fixed.
     advance(5000)
-    expect((await call(t.tools, 'game-build', 'u1', { gameId, landmarkId: lm.id, text: tpl.order })).success).toBe(true)
+    expect((await build(t, gameId, 'u1', lm.id, tpl.order)).success).toBe(true)
     expect(rowsOf(t, 'tasks', { gameId }).find((x) => x.recordId === task.recordId)?.data.status).toBe('done')
     expect(rowsOf(t, 'breaks', { gameId })[0].data.fixed).toBe(1)
     expect(rowsOf(t, 'builds', { gameId, landmarkId: lm.id }).filter((b) => b.data.state !== 'ok')).toHaveLength(0)
@@ -191,10 +215,10 @@ describe('a full game through the server actions', () => {
     const lm = landmarkById(tpl.landmarkId)!
     const stand = { x: lm.x * (1 - 1.6 / Math.hypot(lm.x, lm.z)), z: lm.z * (1 - 1.6 / Math.hypot(lm.x, lm.z)) }
     await walk(t, gameId, 'u1', stand)
-    await call(t.tools, 'game-build', 'u1', { gameId, landmarkId: lm.id, text: tpl.order })
+    await build(t, gameId, 'u1', lm.id, tpl.order)
     await walk(t, gameId, 'u2', stand)
     advance(25_000)
-    expect((await call(t.tools, 'game-wreck', 'u2', { gameId, landmarkId: lm.id, kind: 'paint' })).success).toBe(true)
+    expect((await wreckIt(t, gameId, 'u2', lm.id, 'paint')).success).toBe(true)
     const brk = rowsOf(t, 'breaks', { gameId })[0]
     await walk(t, gameId, 'u1', { x: brk.data.x as number, z: (brk.data.z as number) + 0.8 })
     const rep = await call(t.tools, 'game-report', 'u1', { gameId })
@@ -209,7 +233,11 @@ describe('a full game through the server actions', () => {
     expect(rowsOf(t, 'games')[0].data.phase).toBe('vote')
     // Everyone alive votes for the Impostor; AI votes were already cast for them.
     for (const v of rowsOf(t, 'votes', { gameId })) await t.tools.update('votes', v.recordId, { targetId: players[1].recordId })
+    expect((await call(t.tools, 'game-vote', 'u1', { gameId, targetId: 'skip' })).success).toBe(true)
+    // Votes stay open: changing your mind updates the same vote.
     expect((await call(t.tools, 'game-vote', 'u1', { gameId, targetId: players[1].recordId })).success).toBe(true)
+    expect(rowsOf(t, 'votes', { gameId, voterId: players[0].recordId })).toHaveLength(1)
+    expect(rowsOf(t, 'votes', { gameId, voterId: players[0].recordId })[0].data.targetId).toBe(players[1].recordId)
     expect((await call(t.tools, 'game-vote', 'u2', { gameId, targetId: players[0].recordId })).success).toBe(true)
     advance(VOTE_MS + 100)
     await call(t.tools, 'game-tick', 'u1', { gameId })
@@ -284,5 +312,54 @@ describe('a full game through the server actions', () => {
     const fixed = await call(t.tools, 'game-fix-lights', 'u1', { gameId })
     expect(fixed.success, fixed.error).toBe(true)
     expect(rowsOf(t, 'games')[0].data.lightsOutUntil).toBe(0)
+  })
+
+  it('walking away stops a build, and a vague prompt gets a guessed detail with an explanation', async () => {
+    const { t, gameId, players } = await setup(2)
+    const me = players[0]
+    const tasks = rowsOf(t, 'tasks', { gameId, playerId: me.recordId })
+    const task = tasks.find((x) => taskTemplate(x.data.templateId as string)?.need.color) ?? tasks[0]
+    const tpl = taskTemplate(task.data.templateId as string)!
+    const lm = landmarkById(tpl.landmarkId)!
+    const stand = { x: lm.x * (1 - 1.6 / Math.hypot(lm.x, lm.z)), z: lm.z * (1 - 1.6 / Math.hypot(lm.x, lm.z)) }
+    await walk(t, gameId, 'u1', stand)
+    expect((await call(t.tools, 'game-build', 'u1', { gameId, landmarkId: lm.id, text: tpl.order })).success).toBe(true)
+    await walk(t, gameId, 'u1', { x: 1.2, z: 0.6 })
+    advance(BUILD_MS)
+    const stopped = await call(t.tools, 'game-build-finish', 'u1', { gameId })
+    expect(stopped.error).toMatch(/walked away|Nothing is being built/)
+    expect(rowsOf(t, 'builds', { gameId, playerId: me.recordId })).toHaveLength(0)
+    // Walking away and coming back does not finish it either: the checkpoint on the way out cancelled it.
+    await walk(t, gameId, 'u1', stand)
+    expect((await call(t.tools, 'game-build-finish', 'u1', { gameId })).success).toBe(false)
+
+    // Leave out every detail: just the object word.
+    await walk(t, gameId, 'u1', stand)
+    advance(5000)
+    const vague = await build(t, gameId, 'u1', lm.id, tpl.need.type.replace('_', ' '))
+    expect(vague.success, vague.error).toBe(true)
+    const done = ((vague.data?.completed as string[]) ?? []).includes(tpl.id)
+    const feedback = (vague.data?.feedback as string[]) ?? []
+    if (!done) expect(feedback.join(' ')).toMatch(/The task needs/)
+    expect(rowsOf(t, 'tasks', { gameId }).find((x) => x.recordId === task.recordId)?.data.tries).toBe(1)
+  })
+
+  it('AI players answer a human who talks to them, and a meeting chat stays open while voting', async () => {
+    const { t, gameId, players } = await setup(3)
+    advance(12_000)
+    await walk(t, gameId, 'u1', { x: 1.2, z: 0.6 })
+    expect((await call(t.tools, 'game-bell', 'u1', { gameId })).success).toBe(true)
+    const bot = players.find((p) => p.data.isBot)!
+    const said = await call(t.tools, 'game-chat', 'u1', { gameId, text: `${bot.data.name} where were you?` })
+    expect(said.success, said.error).toBe(true)
+    const replies = rowsOf(t, 'chat', { gameId, playerId: bot.recordId })
+    expect(replies.length).toBeGreaterThan(0)
+    expect(rowsOf(t, 'games')[0].data.replyCalls).toBe(1)
+    advance(MEETING_MS + 100)
+    await call(t.tools, 'game-tick', 'u1', { gameId })
+    expect(rowsOf(t, 'games')[0].data.phase).toBe('vote')
+    // Every AI player has a vote, and chat still works.
+    expect(rowsOf(t, 'votes', { gameId }).length).toBe(players.filter((p) => p.data.isBot).length)
+    expect((await call(t.tools, 'game-chat', 'u1', { gameId, text: 'vote whoever you think it is' })).success).toBe(true)
   })
 })

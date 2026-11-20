@@ -30,7 +30,10 @@ export interface GameRow {
   winner: '' | 'crew' | 'impostor'
   winReason: string
   reveal: Reveal | null
-  botVotes: { playerId: string; targetId: string }[] | null
+  /** AI votes for the current meeting. Firm votes (eyewitnesses) never change. */
+  botVotes: { playerId: string; targetId: string; firm?: boolean }[] | null
+  /** AI reply calls used in the current meeting. */
+  replyCalls?: number
   /** Set when someone starts a rematch, so everyone follows to the new code. */
   nextCode: string
   seed: number
@@ -68,6 +71,24 @@ export interface SecretRow {
   fakeTasks: string[] | string
   wreckReadyAt: number
   lightsReadyAt: number
+  /** Lights outs used this game (the AI Impostor stops at a limit). */
+  lightsUsed?: number
+  /** A build or wreck in progress: finished by a second call once its time is up. */
+  pending?: PendingJob | string | null
+}
+
+export interface PendingJob {
+  kind: 'build' | 'wreck'
+  landmarkId: string
+  startedAt: number
+  readyAt: number
+  narration: string
+  /** Builds: what to place. */
+  items?: { type: string; color: string | null }[]
+  /** Builds: details the builder had to guess, to explain a miss. */
+  guessed?: { color?: string; count?: number; type?: string }[]
+  /** Wrecks: what to do to which target. */
+  acts?: { targetId: string; kind: string; color: string }[]
 }
 
 export type TaskStatus = 'todo' | 'done' | 'broken'
@@ -80,6 +101,10 @@ export interface TaskRow {
   landmarkId: string
   status: TaskStatus
   doneAt: number
+  /** Orders placed at this task's landmark before it was first done. */
+  tries?: number
+  /** 1 when the task was finished on the first prompt. */
+  firstTry?: number
 }
 
 export type BuildState = 'ok' | 'knocked' | 'painted'
@@ -130,6 +155,8 @@ export interface ClueRow {
   nearby: string[] | string
   /** AI players who could see the Impostor at the spot. */
   witnesses: string[] | string
+  /** Where every living player was at that moment: player id to nearest landmark id. */
+  places?: Record<string, string> | string
 }
 
 export interface VoteRow {

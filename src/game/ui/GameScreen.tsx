@@ -11,6 +11,7 @@ import { isMuted, play, setMuted, unlockSound } from '../sound'
 import { callAction, serverNow } from '../api'
 import {
   BELL_RANGE,
+  BUILD_MS,
   CHAT_MAX_CHARS,
   CHECKPOINT_MS,
   EJECT_MS,
@@ -24,6 +25,7 @@ import {
   TASK_RANGE,
   TICK_MS,
   VISION,
+  WRECK_MS,
 } from '../constants'
 import { LANDMARKS, landmarkById, type Landmark } from '../landmarks'
 import { taskTemplate } from '../tasks'
@@ -57,6 +59,11 @@ export function GameScreen({ code }: { code: string }) {
   const [orderFor, setOrderFor] = useState<Landmark | null>(null)
   const [orderText, setOrderText] = useState('')
   const [wreckText, setWreckText] = useState('')
+  /** A build or wreck in progress: the player has to stay at the landmark until it lands. */
+  const [job, setJob] = useState<{ kind: 'build' | 'wreck'; landmarkId: string; t0: number; ms: number; text: string } | null>(null)
+  const jobToken = useRef(0)
+  /** What the last order did, shown in the order box so the player can fix the prompt. */
+  const [result, setResult] = useState<{ text: string; feedback: string[]; good: boolean } | null>(null)
   const [chatText, setChatText] = useState('')
   const [hideOver, setHideOver] = useState(false)
   const [showOver, setShowOver] = useState(false)
@@ -409,38 +416,89 @@ export function GameScreen({ code }: { code: string }) {
     else scene.setFocus(null)
   }, [scene, nearLandmark, canBuild, orderFor])
 
-  // Leaving the landmark closes the order box.
-  useEffect(() => {
-    if (orderFor && (!nearLandmark || nearLandmark.id !== orderFor.id)) setOrderFor(null)
-  }, [nearLandmark, orderFor])
-
-  const openOrder = useCallback(
-    (l: Landmark) => {
-      const mine = myTasks.find((t) => t.data.landmarkId === l.id && t.data.status !== 'done')
-      setOrderText(mine ? taskTemplate(mine.data.templateId)?.order ?? '' : '')
-      setWreckText('')
-      setOrderFor(l)
+  const cancelJob = useCallback(
+    (why?: string) => {
+      jobToken.current++
+      setJob(null)
+      if (why) flash(why)
     },
-    [myTasks],
+    [flash],
   )
 
+  // Leaving the landmark closes the order box and stops a build or wreck in progress.
+  useEffect(() => {
+    if (job && (!nearLandmark || nearLandmark.id !== job.landmarkId)) cancelJob(job.kind === 'build' ? 'You walked away, so the build stopped.' : 'You walked away, so the wreck stopped.')
+    if (orderFor && (!nearLandmark || nearLandmark.id !== orderFor.id)) setOrderFor(null)
+  }, [nearLandmark, orderFor, job, cancelJob])
+  useEffect(() => {
+    if (phase !== 'play' && job) cancelJob()
+  }, [phase, job, cancelJob])
+
+  // The box starts empty: turning the task into a prompt is the player's job.
+  const openOrder = useCallback((l: Landmark) => {
+    setOrderText('')
+    setWreckText('')
+    setResult(null)
+    setOrderFor(l)
+  }, [])
+
   // ─── moves ────────────────────────────────────────────────────────────────
+  /** Start a timed job, wait at the landmark, then finish it. Returns the finish result. */
+  const runJob = async (kind: 'build' | 'wreck', l: Landmark, start: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
+    const token = ++jobToken.current
+    const t0 = Date.now()
+    const ms = kind === 'build' ? BUILD_MS : WRECK_MS
+    setResult(null)
+    setJob({ kind, landmarkId: l.id, t0, ms, text: kind === 'build' ? 'The builder is reading your prompt' : 'Getting to work' })
+    const r = await act(kind === 'build' ? 'game-build' : 'game-wreck', { landmarkId: l.id, ...start })
+    if (jobToken.current !== token) return null
+    if (!r || !r.pending) {
+      setJob(null)
+      if (r?.narration) setResult({ text: String(r.narration), feedback: [], good: false })
+      return null
+    }
+    setJob((j) => (j ? { ...j, text: String(r.narration ?? '') } : j))
+    const wait = Math.max(t0 + ms - Date.now(), Number(r.readyIn ?? 0))
+    await new Promise((res) => window.setTimeout(res, Math.max(0, wait)))
+    if (jobToken.current !== token) return null
+    const finish = kind === 'build' ? 'game-build-finish' : 'game-wreck-finish'
+    let f = await callAction(finish, { gameId, ...(myPos.current ?? {}) }).catch((e: unknown) => e)
+    if (f instanceof Error && /Stay a moment/.test(f.message)) {
+      await new Promise((res) => window.setTimeout(res, 900))
+      f = await callAction(finish, { gameId, ...(myPos.current ?? {}) }).catch((e: unknown) => e)
+    }
+    if (jobToken.current !== token) return null
+    setJob(null)
+    if (f instanceof Error) {
+      flash(f.message)
+      return null
+    }
+    return f as Record<string, unknown>
+  }
+
   const sendOrder = async () => {
     const text = orderText.trim()
-    if (!text || !orderFor || busy) return
-    const r = await act('game-build', { landmarkId: orderFor.id, text }, 'order')
-    if (!r) return
-    const done = (r.completed as string[] | undefined) ?? []
+    if (!text || !orderFor || job) return
+    const f = await runJob('build', orderFor, { text })
+    if (!f) return
+    const done = (f.completed as string[] | undefined) ?? []
+    const feedback = (f.feedback as string[] | undefined) ?? []
     play('pop')
-    flash(done.length ? `Task done. ${String(r.narration ?? '')}` : String(r.narration ?? 'Built.'), done.length > 0)
+    if (feedback.length) {
+      // A miss: keep the box open with the player's own prompt so they can fix it.
+      setResult({ text: String(f.narration ?? 'Built.'), feedback, good: done.length > 0 })
+      return
+    }
+    flash(done.length ? `Task done. ${String(f.narration ?? '')}` : String(f.narration ?? 'Built.'), done.length > 0)
+    setOrderText('')
     setOrderFor(null)
   }
   const sendWreck = async (kind: 'knock' | 'paint' | 'remove' | null) => {
-    if (!orderFor || busy) return
-    const r = await act('game-wreck', { landmarkId: orderFor.id, kind: kind ?? 'knock', text: kind ? '' : wreckText.trim() }, 'wreck')
-    if (!r) return
+    if (!orderFor || job) return
+    const f = await runJob('wreck', orderFor, { kind: kind ?? 'knock', text: kind ? '' : wreckText.trim() })
+    if (!f) return
     play('crash')
-    flash(String(r.narration ?? 'Done.'), true)
+    flash(String(f.narration ?? 'Done.'), true)
     setOrderFor(null)
   }
   const report = () => act('game-report', {}, 'report')
@@ -458,6 +516,7 @@ export function GameScreen({ code }: { code: string }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (job) cancelJob(job.kind === 'build' ? 'Build cancelled.' : 'Wreck cancelled.')
         setOrderFor(null)
         return
       }
@@ -486,6 +545,8 @@ export function GameScreen({ code }: { code: string }) {
   const timeLeft = g ? g.phaseEndsAt - now : 0
   const meetingNo = g?.meetingNo ?? 0
   const visibleChat = chat.filter((c) => c.data.meetingNo === meetingNo && c.data.showAt <= now)
+  // AI lines waiting to appear show as "typing", like a real chat.
+  const typingIds = [...new Set(chat.filter((c) => c.data.meetingNo === meetingNo && c.data.showAt > now && c.data.showAt - now < 3_500).map((c) => c.data.playerId))]
   const meetingVotes = votes.filter((v) => v.data.meetingNo === meetingNo)
   const myVote = me ? meetingVotes.find((v) => v.data.voterId === me.id) : undefined
   const votedIds = new Set(meetingVotes.filter((v) => v.data.showAt <= now).map((v) => v.data.voterId))
@@ -611,8 +672,9 @@ export function GameScreen({ code }: { code: string }) {
                       <div key={id} className="si-task fake">
                         <span className="box" />
                         <span>
-                          {t.text}
                           <em>{landmarkById(t.landmarkId)?.name}</em>
+                          <b>{t.text}</b>
+                          <small>{t.reason}</small>
                         </span>
                       </div>
                     ) : null
@@ -624,8 +686,9 @@ export function GameScreen({ code }: { code: string }) {
                       <div key={task.id} className={`si-task ${task.data.status}`}>
                         <span className="box">{task.data.status === 'done' ? '✓' : task.data.status === 'broken' ? '!' : ''}</span>
                         <span>
-                          {t.text}
                           <em>{task.data.status === 'broken' ? `Wrecked at the ${landmarkById(t.landmarkId)?.name}` : landmarkById(t.landmarkId)?.name}</em>
+                          <b>{t.text}</b>
+                          {task.data.status !== 'done' && <small>{task.data.status === 'broken' ? 'Go back and build it again.' : t.reason}</small>}
                         </span>
                       </div>
                     )
@@ -748,21 +811,43 @@ export function GameScreen({ code }: { code: string }) {
                     <div className="si-eyebrow si-tight">At the</div>
                     <div className="si-role">{orderFor.name}</div>
                   </div>
-                  <button className="si-icon-btn" aria-label="Close" onClick={() => setOrderFor(null)}>
+                  <button
+                    className="si-icon-btn"
+                    aria-label="Close"
+                    onClick={() => {
+                      if (job) cancelJob(job.kind === 'build' ? 'Build cancelled.' : 'Wreck cancelled.')
+                      setOrderFor(null)
+                    }}
+                  >
                     <X size={16} />
                   </button>
                 </div>
+                {(() => {
+                  // What this player is here for: the task details, never a ready made prompt.
+                  const ids = isImpostor ? fakeList : myTasks.filter((t) => t.data.status !== 'done').map((t) => t.data.templateId)
+                  const here = ids.map((id) => taskTemplate(id)).filter((t) => t && t.landmarkId === orderFor.id)
+                  if (!here.length) return <div className="si-small si-mt-sm">{isImpostor ? 'None of your fake tasks are here.' : 'You have no task here. You can still build.'}</div>
+                  return here.map((t) =>
+                    t ? (
+                      <div key={t.id} className="si-taskhere">
+                        <div className="si-eyebrow si-tight">{isImpostor ? 'Your fake task here' : 'Your task here'}</div>
+                        <b>{t.text}</b>
+                        <span>{t.reason}</span>
+                      </div>
+                    ) : null,
+                  )
+                })()}
                 {isImpostor && (
                   <div className="si-wreck">
                     <div className="si-eyebrow si-mt-sm">Wreck a finished task here {wreckWait > 0 ? `(ready in ${Math.ceil(wreckWait / 1000)}s)` : ''}</div>
                     <div className="si-row">
-                      <button className="si-btn red" disabled={wreckWait > 0 || !!busy} onClick={() => sendWreck('knock')}>
+                      <button className="si-btn red" disabled={wreckWait > 0 || !!job} onClick={() => sendWreck('knock')}>
                         <Undo2 size={15} /> Knock over
                       </button>
-                      <button className="si-btn red" disabled={wreckWait > 0 || !!busy} onClick={() => sendWreck('paint')}>
+                      <button className="si-btn red" disabled={wreckWait > 0 || !!job} onClick={() => sendWreck('paint')}>
                         <Paintbrush size={15} /> Paint black
                       </button>
-                      <button className="si-btn red" disabled={wreckWait > 0 || !!busy} onClick={() => sendWreck('remove')}>
+                      <button className="si-btn red" disabled={wreckWait > 0 || !!job} onClick={() => sendWreck('remove')}>
                         <Trash2 size={15} /> Take away
                       </button>
                     </div>
@@ -774,21 +859,33 @@ export function GameScreen({ code }: { code: string }) {
                       }}
                     >
                       <input value={wreckText} maxLength={ORDER_MAX_CHARS} onChange={(e) => setWreckText(e.target.value)} placeholder="Or say it: paint the bird green" />
-                      <button className="si-send red" type="submit" disabled={!wreckText.trim() || wreckWait > 0 || !!busy} aria-label="Wreck">
+                      <button className="si-send red" type="submit" disabled={!wreckText.trim() || wreckWait > 0 || !!job} aria-label="Wreck">
                         <SendHorizontal size={18} />
                       </button>
                     </form>
                     <div className="si-eyebrow si-mt">Or build something to look busy</div>
                   </div>
                 )}
-                {busy === 'order' && (
-                  <div className="si-status">
-                    <span className="si-dots">
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    The builder is working
+                {job && (
+                  <div className={`si-job ${job.kind}`} role="status" aria-live="polite">
+                    <svg className="si-ring" viewBox="0 0 36 36" aria-hidden="true">
+                      <circle className="track" cx="18" cy="18" r="15.5" />
+                      <circle key={job.t0} className="fill" cx="18" cy="18" r="15.5" style={{ animationDuration: `${job.ms}ms` }} />
+                    </svg>
+                    <div>
+                      <b>
+                        {job.kind === 'build' ? 'Building' : 'Wrecking'} {Math.max(0, Math.ceil((job.t0 + job.ms - Date.now()) / 1000))}s
+                      </b>
+                      <span>{job.text.replace(/^Built /, 'Making ').replace(/\.+$/, '')}. Stay here until it is done.</span>
+                    </div>
+                  </div>
+                )}
+                {result && !job && (
+                  <div className={`si-result ${result.good ? 'good' : ''}`} role="status" aria-live="polite">
+                    <b>{result.text}</b>
+                    {result.feedback.map((f) => (
+                      <span key={f}>{f}</span>
+                    ))}
                   </div>
                 )}
                 <form
@@ -803,14 +900,14 @@ export function GameScreen({ code }: { code: string }) {
                     value={orderText}
                     maxLength={ORDER_MAX_CHARS}
                     onChange={(e) => setOrderText(e.target.value)}
-                    placeholder="Tell the builder what to make here"
-                    disabled={busy === 'order'}
+                    placeholder="Write your prompt: what should the builder make?"
+                    disabled={!!job}
                   />
-                  <button className="si-send" type="submit" disabled={!orderText.trim() || !!busy} aria-label="Build">
+                  <button className="si-send" type="submit" disabled={!orderText.trim() || !!job} aria-label="Build">
                     <SendHorizontal size={18} />
                   </button>
                 </form>
-                <div className="si-small si-mt-sm">Esc to close. The builder follows your words exactly.</div>
+                <div className="si-small si-mt-sm">The builder follows your words. Anything you leave out, it guesses. Esc to close.</div>
               </div>
             </div>
           )}
@@ -848,6 +945,16 @@ export function GameScreen({ code }: { code: string }) {
                   </div>
                 </div>
               ))}
+              {typingIds.length > 0 && (
+                <div className="si-typing">
+                  <span className="si-dots">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  {typingIds.map(nameOf).join(' and ')} {typingIds.length > 1 ? 'are' : 'is'} typing
+                </div>
+              )}
               <div ref={chatEnd} />
             </div>
             {me && alive && (
@@ -858,7 +965,7 @@ export function GameScreen({ code }: { code: string }) {
                   sendChat()
                 }}
               >
-                <input value={chatText} maxLength={CHAT_MAX_CHARS} onChange={(e) => setChatText(e.target.value)} placeholder="Say something. Name someone to ask them." />
+                <input value={chatText} maxLength={CHAT_MAX_CHARS} onChange={(e) => setChatText(e.target.value)} placeholder="Say something. Name someone to ask them directly." />
                 <button className="si-send" type="submit" disabled={!chatText.trim()} aria-label="Send message">
                   <SendHorizontal size={18} />
                 </button>
@@ -868,7 +975,7 @@ export function GameScreen({ code }: { code: string }) {
           </div>
           {phase === 'vote' && (
             <div className="si-card">
-              <div className="si-eyebrow">{myVote ? 'You voted' : me && alive ? 'Who is the Impostor?' : 'Votes'}</div>
+              <div className="si-eyebrow">{myVote ? 'You voted. You can change it until time runs out' : me && alive ? 'Who is the Impostor?' : 'Votes'}</div>
               <div className="si-votes">
                 {players
                   .filter((p) => p.data.alive)
@@ -877,7 +984,7 @@ export function GameScreen({ code }: { code: string }) {
                       key={p.id}
                       className={`si-vote ${myVote?.data.targetId === p.id ? 'picked' : ''}`}
                       style={{ ['--c' as string]: p.data.color }}
-                      disabled={!me || !alive || Boolean(myVote) || p.id === meId}
+                      disabled={!me || !alive || p.id === meId || myVote?.data.targetId === p.id}
                       onClick={() => act('game-vote', { targetId: p.id })}
                     >
                       <span className="si-dot" />
@@ -885,7 +992,7 @@ export function GameScreen({ code }: { code: string }) {
                       {votedIds.has(p.id) && <span className="voted">voted</span>}
                     </button>
                   ))}
-                <button className={`si-vote skip ${myVote?.data.targetId === 'skip' ? 'picked' : ''}`} disabled={!me || !alive || Boolean(myVote)} onClick={() => act('game-vote', { targetId: 'skip' })}>
+                <button className={`si-vote skip ${myVote?.data.targetId === 'skip' ? 'picked' : ''}`} disabled={!me || !alive || myVote?.data.targetId === 'skip'} onClick={() => act('game-vote', { targetId: 'skip' })}>
                   Skip vote
                 </button>
               </div>
@@ -914,6 +1021,18 @@ export function GameScreen({ code }: { code: string }) {
                 {g.reveal?.wrecks ? `They wrecked ${g.reveal.wrecks} finished ${g.reveal.wrecks === 1 ? 'task' : 'tasks'}.` : 'They never wrecked a finished task.'} The crew finished {g.tasksDone} of {g.tasksTotal} tasks.
               </div>
             </div>
+            {role === 'crew' && myTasks.length > 0 && (
+              <div className="si-card si-mt-sm si-prompts">
+                <div className="si-eyebrow">Your prompts</div>
+                <div className="si-small">
+                  {(() => {
+                    const first = myTasks.filter((t) => t.data.firstTry).length
+                    const tries = myTasks.reduce((n, t) => n + (t.data.tries ?? 0), 0)
+                    return `${first} of ${myTasks.length} tasks done on the first prompt. ${tries} ${tries === 1 ? 'prompt' : 'prompts'} sent for your tasks.`
+                  })()}
+                </div>
+              </div>
+            )}
             <div className="si-row si-between si-mt">
               <button className="si-btn" onClick={() => setHideOver(true)}>
                 Look around

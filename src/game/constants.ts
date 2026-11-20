@@ -10,7 +10,7 @@ export const TASKS_PER_CREW = 3
 export const INTRO_MS = 7_000
 /** Play time until night falls, not counting meetings. */
 export const PLAY_MS = 7 * 60_000
-export const MEETING_MS = 45_000
+export const MEETING_MS = 60_000
 export const VOTE_MS = 30_000
 export const EJECT_MS = 9_000
 /** How often the ticking browser advances the game. */
@@ -24,6 +24,24 @@ export const BELL_LOCK_MS = 15_000
 export const BELLS_PER_PLAYER = 1
 /** A player can send one order to the builder this often. */
 export const ORDER_COOLDOWN_MS = 4_000
+/** Building or fixing a task takes this long standing at the landmark. */
+export const BUILD_MS = 8_000
+/** A wreck takes half as long as a build. */
+export const WRECK_MS = 4_000
+/** How early a finish may arrive, for network lag; and how long a started job stays valid. */
+export const JOB_SLACK_MS = 1_200
+export const JOB_EXPIRES_MS = 30_000
+/** When a prompt leaves out a detail the task needs, the builder's guess matches this often. */
+export const GUESS_RATE = 1 / 3
+
+/** AI Impostor pacing, slower than a human's cooldowns. */
+export const BOT_FIRST_WRECK_MS = 75_000
+export const BOT_WRECK_MIN_MS = 60_000
+export const BOT_WRECK_MAX_MS = 80_000
+export const BOT_LIGHTS_MAX = 2
+export const BOT_LIGHTS_COOLDOWN_MS = 120_000
+/** AI reply calls allowed per meeting, across all human messages. */
+export const MAX_REPLY_CALLS = 10
 
 /** Distances, in island units. */
 export const TASK_RANGE = 3.0

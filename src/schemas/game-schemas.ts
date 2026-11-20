@@ -56,6 +56,7 @@ export const gamesSchema: CollectionSchema = {
     text('winReason', 300),
     json('reveal'),
     json('botVotes'),
+    num('replyCalls'),
     text('nextCode', 8),
     num('seed'),
   ],
@@ -94,6 +95,8 @@ export const secretsSchema: CollectionSchema = {
     json('fakeTasks'),
     num('wreckReadyAt'),
     num('lightsReadyAt'),
+    num('lightsUsed'),
+    json('pending'),
   ],
   ownerField: 'ownerUserId',
   permissions: ownRead,
@@ -109,6 +112,8 @@ export const tasksSchema: CollectionSchema = {
     text('landmarkId'),
     text('status'),
     num('doneAt'),
+    num('tries'),
+    num('firstTry'),
   ],
   ownerField: 'ownerUserId',
   permissions: ownRead,
@@ -151,7 +156,7 @@ export const routesSchema: CollectionSchema = {
 
 export const cluesSchema: CollectionSchema = {
   name: 'clues',
-  columns: [text('gameId'), text('landmarkId'), num('at'), text('impostorId'), json('nearby'), json('witnesses')],
+  columns: [text('gameId'), text('landmarkId'), num('at'), text('impostorId'), json('nearby'), json('witnesses'), json('places')],
   permissions: serverOnly,
 }
 

@@ -14,10 +14,20 @@
 import type { ActionHandler, ActionResult, ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker'
 import { routeDone, routePos, stayLeg, standSpot, walkLeg, type Leg } from '../game/bots'
-import { COLORS, type BuildType, type ColorName } from '../game/catalog'
+import { COLORS, isBuildType, normalizeColor, type BuildType, type ColorName } from '../game/catalog'
 import {
   BELL_LOCK_MS,
   BELL_RANGE,
+  BOT_FIRST_WRECK_MS,
+  BOT_LIGHTS_COOLDOWN_MS,
+  BOT_LIGHTS_MAX,
+  BOT_WRECK_MAX_MS,
+  BOT_WRECK_MIN_MS,
+  BUILD_MS,
+  JOB_EXPIRES_MS,
+  JOB_SLACK_MS,
+  MAX_REPLY_CALLS,
+  WRECK_MS,
   BELLS_PER_PLAYER,
   BOT_NAMES,
   CHAT_MAX_CHARS,
@@ -46,10 +56,10 @@ import {
   WRECK_COOLDOWN_MS,
   type Phase,
 } from '../game/constants'
-import { LANDMARKS, landmarkById, walkable, type Landmark } from '../game/landmarks'
+import { LANDMARKS, landmarkById, nearestLandmark, walkable, type Landmark } from '../game/landmarks'
 import { hashString, makeRng, placeOne, type PlacedLike, type Rng } from '../game/placement'
 import { assignRoles, decideWinner, makeCode, normalizeCode, skyFor, tally } from '../game/rules'
-import { dealTasks, fakeTasks, spotAtLandmark, taskDone, taskTemplate } from '../game/tasks'
+import { dealTasks, explainMiss, fakeTasks, spotAtLandmark, taskDone, taskTemplate } from '../game/tasks'
 import type {
   BreakRow,
   BuildRow,
@@ -57,14 +67,15 @@ import type {
   ClueRow,
   EventRow,
   GameRow,
+  PendingJob,
   PlayerRow,
   RouteRow,
   SecretRow,
   TaskRow,
   VoteRow,
 } from '../game/types'
-import { describeItems, quickWreck, runBuilderAgent, runWreckAgent, type WreckKind, type WreckTarget } from '../server/builder-agent'
-import { planMeeting, replyToMention } from '../server/meeting-ai'
+import { describeItems, fillGaps, quickWreck, runBuilderAgent, runWreckAgent, type TaskNeed, type WreckKind, type WreckTarget } from '../server/builder-agent'
+import { planMeeting, planVotes, replyInMeeting, type MeetingInput } from '../server/meeting-ai'
 
 type Ctx = Parameters<ActionHandler<Env>>[0]
 type Row<T> = { id: string; data: T; createdAt: string }
@@ -326,7 +337,15 @@ async function applyWreck(
     const witnesses = players
       .filter((p) => p.data.isBot && p.data.alive && p.id !== impostor.id && dist(pos.get(p.id) as Pos, impostorPos) <= sight)
       .map((p) => p.id)
-    await create<ClueRow>(tools, 'clues', { gameId: game.id, landmarkId: landmark.id, at: now, impostorId: impostor.id, nearby: [impostor.id, ...nearby], witnesses })
+    // Where everyone was, so AI players can give real alibis and catch fake ones.
+    const places: Record<string, string> = {}
+    for (const p of players) {
+      if (!p.data.alive) continue
+      const at = pos.get(p.id) as Pos
+      const near = nearestLandmark(at.x, at.z, (l) => l.area > 0 || l.id === 'bell')
+      if (near) places[p.id] = near.landmark.id
+    }
+    await create<ClueRow>(tools, 'clues', { gameId: game.id, landmarkId: landmark.id, at: now, impostorId: impostor.id, nearby: [impostor.id, ...nearby], witnesses, places })
   }
   return res
 }
@@ -391,7 +410,8 @@ async function runBots(env: Env, tools: ActionTools, game: Row<GameRow>, now: nu
       const tpl = taskTemplate(last.ref.slice(5))
       const lm = tpl ? landmarkById(tpl.landmarkId) : null
       if (tpl && lm && dist(here, lm) <= TASK_RANGE + 0.5) {
-        await placeItems(tools, game, bot, lm, [{ type: tpl.need.type, color: tpl.need.color ?? null }], '', rng)
+        const want = Math.max(1, tpl.need.count ?? 1)
+        await placeItems(tools, game, bot, lm, Array.from({ length: want }, () => ({ type: tpl.need.type, color: tpl.need.color ?? null })), '', rng)
         const res = await refreshTasks(tools, game, lm.id)
         await settleBreaks(tools, game.id, lm.id)
         tasks = null
@@ -410,18 +430,21 @@ async function runBots(env: Env, tools: ActionTools, game: Row<GameRow>, now: nu
       const lm = landmarkById(last.ref.slice(6))
       const secret = secrets.find((s) => s.data.playerId === bot.id)
       const watched = players.some((p) => p.id !== bot.id && p.data.alive && dist(pos.get(p.id) as Pos, here) <= (dark ? VISION.lightsOut : 4.5))
+      // The wait leg at the landmark is the wreck's standing time (at least WRECK_MS).
       if (lm && secret && secret.data.wreckReadyAt <= now && (!watched || rng() < 0.12)) {
         const { targets, rows } = await wreckTargets(tools, game.id, lm.id)
         if (targets.length) {
           const plan = quickWreck(WRECK_KINDS[Math.floor(rng() * WRECK_KINDS.length)], targets)
           await applyWreck(tools, game, bot, here, lm, plan.acts, targets, rows)
-          await must(tools.update('secrets', secret.id, { wreckReadyAt: now + WRECK_COOLDOWN_MS }))
+          const gap = BOT_WRECK_MIN_MS + rng() * (BOT_WRECK_MAX_MS - BOT_WRECK_MIN_MS)
+          await must(tools.update('secrets', secret.id, { wreckReadyAt: now + gap }))
           tasks = null
         }
       }
-      if (secret && secret.data.lightsReadyAt <= now && !dark && rng() < 0.15) {
+      const used = secret?.data.lightsUsed ?? 0
+      if (secret && used < BOT_LIGHTS_MAX && secret.data.lightsReadyAt <= now && !dark && rng() < 0.15) {
         await patchGame(tools, game.id, { lightsOutUntil: now + LIGHTS_OUT_MS })
-        await must(tools.update('secrets', secret.id, { lightsReadyAt: now + LIGHTS_COOLDOWN_MS }))
+        await must(tools.update('secrets', secret.id, { lightsReadyAt: now + BOT_LIGHTS_COOLDOWN_MS, lightsUsed: used + 1 }))
         await event(tools, game.id, 'lights', 'The lights went out! Fix them at the Power Shed.')
       }
     }
@@ -458,7 +481,7 @@ async function runBots(env: Env, tools: ActionTools, game: Row<GameRow>, now: nu
         const lm = landmarkById(task.data.landmarkId) as Landmark
         const ref = `task:${task.data.templateId}`
         const walk = walkLeg(here, standSpot(lm, rng), now + Math.round(rng() * 1500), ref)
-        next = [stayLeg(here, now, walk.t0 - now, 'wait'), walk, stayLeg({ x: walk.x1, z: walk.z1 }, walk.t1, 5000 + rng() * 4000, 'work', ref)]
+        next = [stayLeg(here, now, walk.t0 - now, 'wait'), walk, stayLeg({ x: walk.x1, z: walk.z1 }, walk.t1, BUILD_MS + rng() * 1500, 'work', ref)]
         goal = ref
       }
     } else {
@@ -468,7 +491,7 @@ async function runBots(env: Env, tools: ActionTools, game: Row<GameRow>, now: nu
       const weighted = options.flatMap((l) => (done.includes(l.id) ? [l, l, l] : [l]))
       const lm = weighted[Math.floor(rng() * weighted.length)]
       const walk = walkLeg(here, standSpot(lm, rng), now + Math.round(rng() * 2000), `wreck:${lm.id}`)
-      next = [stayLeg(here, now, walk.t0 - now, 'wait'), walk, stayLeg({ x: walk.x1, z: walk.z1 }, walk.t1, 2500 + rng() * 3000, 'wait', `wreck:${lm.id}`)]
+      next = [stayLeg(here, now, walk.t0 - now, 'wait'), walk, stayLeg({ x: walk.x1, z: walk.z1 }, walk.t1, WRECK_MS + 500 + rng() * 2500, 'wait', `wreck:${lm.id}`)]
       goal = 'wreck'
     }
     if (!next.length) {
@@ -501,9 +524,9 @@ async function startMeeting(env: Env, tools: ActionTools, game: Row<GameRow>, ca
   const playMsLeft = Math.max(0, game.data.nightAt - t)
   await patchGame(tools, game.id, {
     phase: 'meeting', meetingNo, phaseEndsAt: t + MEETING_MS, playMsLeft, meetingCalledBy: caller.data.name,
-    meetingReason: reason, meetingWhere: where, lightsOutUntil: 0, botVotes: [],
+    meetingReason: reason, meetingWhere: where, lightsOutUntil: 0, botVotes: [], replyCalls: 0,
   })
-  Object.assign(game.data, { phase: 'meeting', meetingNo })
+  Object.assign(game.data, { phase: 'meeting', meetingNo, meetingCalledBy: caller.data.name, meetingReason: reason, meetingWhere: where, replyCalls: 0 })
   await event(
     tools,
     game.id,
@@ -520,42 +543,60 @@ async function startMeeting(env: Env, tools: ActionTools, game: Row<GameRow>, ca
   }
   await parkBots(tools, game.id, alive, t + MEETING_MS + VOTE_MS + EJECT_MS + 60_000)
 
+  const plan = await planMeeting(env, await meetingInput(tools, game, 'opening'))
+  // The opening back and forth fills the first half; the rest is left for the humans.
+  const start = Date.now()
+  const span = Math.min(MEETING_MS * 0.5, 4_000 + plan.lines.length * 4_500)
+  for (let i = 0; i < plan.lines.length; i++) {
+    const showAt = start + 2_500 + Math.round((span * i) / Math.max(1, plan.lines.length))
+    await create<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo, playerId: plan.lines[i].playerId, text: plan.lines[i].text, showAt })
+  }
+}
+
+/** Everything the meeting AI needs: players and roles, private clues, and the chat shown so far. */
+async function meetingInput(tools: ActionTools, game: Row<GameRow>, salt: string): Promise<MeetingInput> {
+  const players = await loadPlayers(tools, game.id)
   const secrets = await loadSecrets(tools, game.id)
   const clues = await query<ClueRow>(tools, 'clues', { gameId: game.id }, 50)
-  const plan = await planMeeting(env, {
+  const t = Date.now()
+  const chat = (await query<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo: game.data.meetingNo }, 200))
+    .filter((c) => c.data.showAt <= t + 500)
+    .sort((a, b) => a.data.showAt - b.data.showAt)
+  const nameOfLm = (id: string) => landmarkById(id)?.name ?? 'somewhere'
+  return {
     players: players.map((p) => ({
       id: p.id, name: p.data.name, isBot: Boolean(p.data.isBot), alive: Boolean(p.data.alive),
       isImpostor: secrets.some((s) => s.data.playerId === p.id && s.data.role === 'impostor'),
     })),
     clues: clues.map((c) => ({
-      landmark: landmarkById(c.data.landmarkId)?.name ?? 'somewhere', at: c.data.at, impostorId: c.data.impostorId,
+      landmark: nameOfLm(c.data.landmarkId), at: c.data.at, impostorId: c.data.impostorId,
       nearby: parseJson<string[]>(c.data.nearby, []), witnesses: parseJson<string[]>(c.data.witnesses, []),
+      places: Object.fromEntries(Object.entries(parseJson<Record<string, string>>(c.data.places, {})).map(([id, lm]) => [id, nameOfLm(lm)])),
     })),
-    callerName: caller.data.name,
-    reason,
-    where,
-    rng: rngFor(game.id, 'meeting', meetingNo),
-  })
-  const start = Date.now()
-  const span = MEETING_MS - 12_000
-  for (let i = 0; i < plan.lines.length; i++) {
-    const showAt = start + 3_000 + Math.round((span * (i + 0.3)) / Math.max(1, plan.lines.length))
-    await create<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo, playerId: plan.lines[i].playerId, text: plan.lines[i].text, showAt })
+    callerName: game.data.meetingCalledBy,
+    reason: game.data.meetingReason === 'report' ? 'report' : 'bell',
+    where: game.data.meetingWhere,
+    rng: rngFor(game.id, `meeting:${salt}`, game.data.meetingNo * 1000 + chat.length),
+    chat: chat.map((c) => ({ playerId: c.data.playerId, text: c.data.text })),
   }
-  await patchGame(tools, game.id, { botVotes: plan.votes })
 }
 
-async function startVote(tools: ActionTools, game: Row<GameRow>) {
+async function startVote(env: Env, tools: ActionTools, game: Row<GameRow>) {
   const t = Date.now()
   await patchGame(tools, game.id, { phase: 'vote', phaseEndsAt: t + VOTE_MS })
+  game.data.phase = 'vote'
+  // AI players decide now, after reading the whole discussion.
+  const votes = await planVotes(env, await meetingInput(tools, game, 'votes'))
+  await patchGame(tools, game.id, { botVotes: votes })
   const rng = rngFor(game.id, 'votes', game.data.meetingNo)
   const players = await loadPlayers(tools, game.id)
-  for (const v of game.data.botVotes ?? []) {
+  for (const v of votes) {
     const voter = players.find((p) => p.id === v.playerId)
     if (!voter || !voter.data.alive) continue
+    // Sure players vote fast; the rest take their time, which leaves room to argue.
     await tools.create('votes', {
       gameId: game.id, meetingNo: game.data.meetingNo, voterId: v.playerId, targetId: v.targetId,
-      showAt: t + 2_000 + Math.round(rng() * 14_000),
+      showAt: t + (v.firm ? 2_000 + Math.round(rng() * 3_000) : 5_000 + Math.round(rng() * 15_000)),
     })
   }
 }
@@ -723,16 +764,19 @@ async function startGame({ userId, params, tools }: Ctx): Promise<ActionResult> 
   const roles = assignRoles(players.map((p) => p.id), rng)
   const crew = players.filter((p) => roles[p.id] === 'crew').map((p) => p.id)
   const deal = dealTasks(crew, rng, TASKS_PER_CREW)
-  const firstWreck = t + INTRO_MS + FIRST_WRECK_MS
   for (const p of players) {
+    // An AI Impostor starts slower than a human one, so the crew has time to build.
+    const firstWreck = t + INTRO_MS + (p.data.isBot ? BOT_FIRST_WRECK_MS : FIRST_WRECK_MS)
     await create<SecretRow>(tools, 'secrets', {
       gameId: game.id, playerId: p.id, ownerUserId: p.data.userId, role: roles[p.id],
       fakeTasks: roles[p.id] === 'impostor' ? fakeTasks(rng, TASKS_PER_CREW) : [], wreckReadyAt: firstWreck, lightsReadyAt: firstWreck,
+      lightsUsed: 0, pending: null,
     })
     for (const templateId of deal[p.id] ?? []) {
       const tpl = taskTemplate(templateId)
       await create<TaskRow>(tools, 'tasks', {
         gameId: game.id, playerId: p.id, ownerUserId: p.data.userId, templateId, landmarkId: tpl?.landmarkId ?? '', status: 'todo', doneAt: 0,
+        tries: 0, firstTry: 0,
       })
     }
     const s = seatSpot(p.data.seat)
@@ -772,7 +816,7 @@ async function tick({ env, params, tools }: Ctx): Promise<ActionResult> {
     }
     await runBots(env, tools, game, t)
   } else if (phase === 'meeting' && t >= game.data.phaseEndsAt) {
-    await startVote(tools, game)
+    await startVote(env, tools, game)
   } else if (phase === 'vote' && t >= game.data.phaseEndsAt) {
     await resolveVote(tools, game)
   } else if (phase === 'eject' && t >= game.data.phaseEndsAt) {
@@ -793,6 +837,13 @@ async function reportPos({ userId, params, tools }: Ctx): Promise<ActionResult> 
   const t = Date.now()
   const pos = legalMove(prevOf(me.data), { x, z }, t)
   await must(tools.update('players', me.id, { x: pos.x, z: pos.z, posAt: t, lastActiveAt: t }))
+  // Leaving the landmark during a build or wreck cancels it, so it cannot be finished from afar.
+  if (game.data.phase === 'play') {
+    const secret = (await query<SecretRow>(tools, 'secrets', { gameId: game.id, playerId: me.id }, 1))[0]
+    const job = parseJson<PendingJob | null>(secret?.data.pending, null)
+    const lm = job ? landmarkById(job.landmarkId) : null
+    if (secret && lm && dist(pos, lm) > TASK_RANGE + 0.4) await must(tools.update('secrets', secret.id, { pending: null }))
+  }
   return ok({ x: pos.x, z: pos.z })
 }
 
@@ -813,12 +864,25 @@ async function playMove(ctx: Ctx, opts: { living?: boolean } = {}) {
   return { game, me, secret, pos, now }
 }
 
+/** A started job for this caller, if it is still valid. */
+function pendingOf(secret: Row<SecretRow> | undefined, kind: PendingJob['kind'], now: number): PendingJob | null {
+  const job = parseJson<PendingJob | null>(secret?.data.pending, null)
+  if (!job || job.kind !== kind) return null
+  if (now - job.startedAt > JOB_EXPIRES_MS) return null
+  return job
+}
+
+/**
+ * Start a build: the builder reads the prompt now, and the objects appear when
+ * the player has stood at the landmark for BUILD_MS (see finishBuild).
+ */
 async function buildOrder(ctx: Ctx): Promise<ActionResult> {
   const { env, params, tools } = ctx
   const m = await playMove(ctx)
   if ('error' in m) return m.error as ActionResult
   const { game, me, secret, pos, now } = m
-  if (!me.data.alive && secret?.data.role === 'impostor') return fail('Ghosts cannot do that.')
+  if (!secret) return fail('You are not in this game.')
+  if (!me.data.alive && secret.data.role === 'impostor') return fail('Ghosts cannot do that.')
   const landmark = landmarkById(String(params.landmarkId ?? ''))
   if (!landmark || !landmark.area) return fail('Walk up to a landmark first.')
   if (dist(pos, landmark) > TASK_RANGE) return fail(`Walk closer to the ${landmark.name}.`, 'too_far')
@@ -833,19 +897,70 @@ async function buildOrder(ctx: Ctx): Promise<ActionResult> {
     .map((b) => `${b.data.colorName ? `${b.data.colorName} ` : ''}${b.data.type.replace('_', ' ')}`)
   const plan = await runBuilderAgent(env, { text, landmarkName: landmark.name, here, capacity: MAX_BUILDS_PER_GAME - builds.length })
   if (!plan.items.length) return ok({ narration: plan.narration, placed: 0, completed: [] })
-  const placed = await placeItems(tools, game, me, landmark, plan.items, `o${now}`, makeRng(hashString(`${me.id}:${now}`)))
-  const res = await refreshTasks(tools, game, landmark.id)
-  await settleBreaks(tools, game.id, landmark.id)
-  const completed = res.done.filter((t) => t.data.playerId === me.id).map((t) => t.data.templateId)
-  if (res.total && res.count >= res.total) await finishIfOver(tools, game)
-  return ok({ narration: plan.narration || describeItems(plan.items), placed, completed, usedModel: plan.usedModel })
+  // Vague prompts: the builder makes up the details the player left out.
+  const mine = (await loadTasks(tools, game.id)).filter((t) => t.data.playerId === me.id && t.data.landmarkId === landmark.id && t.data.status !== 'done')
+  const needs = mine.map((t) => taskTemplate(t.data.templateId)?.need).filter((x): x is TaskNeed => Boolean(x))
+  const filled = fillGaps(plan.items, needs, text, makeRng(hashString(`${me.id}:${now}:gaps`)))
+  const job: PendingJob = {
+    kind: 'build', landmarkId: landmark.id, startedAt: now, readyAt: now + BUILD_MS,
+    narration: filled.guessed.length ? describeItems(filled.items) : plan.narration || describeItems(filled.items),
+    items: filled.items, guessed: filled.guessed,
+  }
+  await must(tools.update('secrets', secret.id, { pending: job }))
+  return ok({ pending: true, readyIn: Math.max(0, job.readyAt - Date.now()), narration: job.narration, usedModel: plan.usedModel })
 }
 
+/** Finish a started build if the player stayed at the landmark long enough. */
+async function finishBuild(ctx: Ctx): Promise<ActionResult> {
+  const { tools } = ctx
+  const m = await playMove(ctx)
+  if ('error' in m) return m.error as ActionResult
+  const { game, me, secret, pos, now } = m
+  const job = pendingOf(secret, 'build', now)
+  if (!secret || !job) return fail('Nothing is being built. Send an order first.', 'no_job')
+  const landmark = landmarkById(job.landmarkId)
+  if (!landmark) return fail('Nothing is being built. Send an order first.', 'no_job')
+  if (now < job.readyAt - JOB_SLACK_MS) return fail('Still building. Stay a moment longer.', 'too_soon')
+  await must(tools.update('secrets', secret.id, { pending: null }))
+  if (dist(pos, landmark) > TASK_RANGE + 0.4) return fail(`You walked away from the ${landmark.name}, so the build stopped.`, 'too_far')
+
+  const items = (job.items ?? []).filter((it) => isBuildType(it.type)).map((it) => ({ type: it.type as BuildType, color: normalizeColor(it.color) }))
+  const before = (await loadTasks(tools, game.id)).filter((t) => t.data.playerId === me.id && t.data.landmarkId === landmark.id)
+  const open = before.filter((t) => t.data.status !== 'done')
+  for (const t of open) {
+    t.data.tries = (t.data.tries ?? 0) + 1
+    await must(tools.update('tasks', t.id, { tries: t.data.tries }))
+  }
+  const placed = await placeItems(tools, game, me, landmark, items, `o${job.startedAt}`, makeRng(hashString(`${me.id}:${job.startedAt}`)))
+  const res = await refreshTasks(tools, game, landmark.id)
+  await settleBreaks(tools, game.id, landmark.id)
+  const completed: string[] = []
+  for (const t of res.done) {
+    if (t.data.playerId !== me.id) continue
+    completed.push(t.data.templateId)
+    const was = before.find((b) => b.id === t.id)
+    if (was && !was.data.doneAt && (was.data.tries ?? 0) <= 1) await must(tools.update('tasks', t.id, { firstTry: 1 }))
+  }
+  // Why the order missed, for each of this player's tasks here that is still open.
+  const builds = (await loadBuilds(tools, game.id, landmark.id)).map((b) => b.data).filter((b) => b.playerId === me.id)
+  const feedback: string[] = []
+  for (const t of open) {
+    if (completed.includes(t.data.templateId)) continue
+    const tpl = taskTemplate(t.data.templateId)
+    if (!tpl) continue
+    const line = explainMiss(tpl, builds, job.guessed?.find((g) => g.type === tpl.need.type))
+    if (line) feedback.push(line)
+  }
+  if (res.total && res.count >= res.total) await finishIfOver(tools, game)
+  return ok({ narration: job.narration, placed, completed, feedback })
+}
+
+/** Start a wreck: it lands after WRECK_MS standing at the landmark (see finishWreck). */
 async function wreck(ctx: Ctx): Promise<ActionResult> {
   const { env, params, tools } = ctx
   const m = await playMove(ctx, { living: true })
   if ('error' in m) return m.error as ActionResult
-  const { game, me, secret, pos, now } = m
+  const { game, secret, pos, now } = m
   if (!secret || secret.data.role !== 'impostor') return fail('Only the Impostor can do that.', 'forbidden')
   if (secret.data.wreckReadyAt > now) return fail('Not yet. Your wreck is cooling down.')
   const landmark = landmarkById(String(params.landmarkId ?? ''))
@@ -856,9 +971,38 @@ async function wreck(ctx: Ctx): Promise<ActionResult> {
   const text = typeof params.text === 'string' ? params.text.replace(/\s+/g, ' ').trim().slice(0, ORDER_MAX_CHARS) : ''
   const kind = (['knock', 'paint', 'remove'] as WreckKind[]).includes(params.kind as WreckKind) ? (params.kind as WreckKind) : 'knock'
   const plan = text ? await runWreckAgent(env, { text, landmarkName: landmark.name, targets }) : quickWreck(kind, targets)
+  if (!plan.acts.length) return fail(plan.narration || 'Nothing here was touched.')
+  // Remember the actual builds, since target ids are only labels for this list.
+  const acts = plan.acts.map((a) => ({ ...a, targetId: rows[targets.findIndex((t) => t.id === a.targetId)]?.id ?? '' })).filter((a) => a.targetId)
+  const job: PendingJob = { kind: 'wreck', landmarkId: landmark.id, startedAt: now, readyAt: now + WRECK_MS, narration: plan.narration, acts }
+  await must(tools.update('secrets', secret.id, { pending: job }))
+  return ok({ pending: true, readyIn: Math.max(0, job.readyAt - Date.now()), narration: plan.narration })
+}
+
+/** Finish a started wreck if the Impostor stayed put. */
+async function finishWreck(ctx: Ctx): Promise<ActionResult> {
+  const { tools } = ctx
+  const m = await playMove(ctx, { living: true })
+  if ('error' in m) return m.error as ActionResult
+  const { game, me, secret, pos, now } = m
+  if (!secret || secret.data.role !== 'impostor') return fail('Only the Impostor can do that.', 'forbidden')
+  const job = pendingOf(secret, 'wreck', now)
+  const landmark = job ? landmarkById(job.landmarkId) : null
+  if (!job || !landmark) return fail('No wreck in progress.', 'no_job')
+  if (now < job.readyAt - JOB_SLACK_MS) return fail('Still wrecking. Stay a moment longer.', 'too_soon')
+  await must(tools.update('secrets', secret.id, { pending: null }))
+  if (dist(pos, landmark) > TASK_RANGE + 0.4) return fail(`You walked away from the ${landmark.name}, so the wreck stopped.`, 'too_far')
+  const { targets, rows } = await wreckTargets(tools, game.id, landmark.id)
+  const acts = (job.acts ?? [])
+    .map((a) => {
+      const i = rows.findIndex((r) => r.id === a.targetId)
+      return i < 0 ? null : { targetId: targets[i].id, kind: a.kind as WreckKind, color: normalizeColor(a.color) ?? 'black' }
+    })
+    .filter((a): a is { targetId: string; kind: WreckKind; color: ColorName } => Boolean(a))
+  if (!acts.length) return fail('Someone fixed it first. Nothing here was touched.')
   await must(tools.update('secrets', secret.id, { wreckReadyAt: now + WRECK_COOLDOWN_MS }))
-  const res = await applyWreck(tools, game, me, pos, landmark, plan.acts, targets, rows)
-  return ok({ narration: plan.narration, broke: res.broken.length })
+  const res = await applyWreck(tools, game, me, pos, landmark, acts, targets, rows)
+  return ok({ narration: job.narration, broke: res.broken.length })
 }
 
 async function lightsOut(ctx: Ctx): Promise<ActionResult> {
@@ -925,20 +1069,30 @@ async function sendChat({ env, userId, params, tools }: Ctx): Promise<ActionResu
   const t = Date.now()
   await create<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo: game.data.meetingNo, playerId: me.id, text, showAt: t })
 
-  // An AI player who is named in the message answers once.
-  const named = players.find((p) => p.data.isBot && p.data.alive && new RegExp(`\\b${p.data.name}\\b`, 'i').test(text))
-  if (named && game.data.phaseEndsAt - t > 4_000) {
-    const secrets = await loadSecrets(tools, game.id)
-    const isImpostor = secrets.some((s) => s.data.playerId === named.id && s.data.role === 'impostor')
-    const theirTasks = (await loadTasks(tools, game.id)).filter((x) => x.data.playerId === named.id)
-    const reply = await replyToMention(env, {
-      botName: named.data.name,
-      isImpostor,
-      accuser: me.data.name,
-      message: text,
-      alibi: theirTasks.map((x) => landmarkById(x.data.landmarkId)?.name ?? '').filter(Boolean),
+  // AI players answer every human message, within a per meeting budget.
+  const voting = game.data.phase === 'vote'
+  const used = game.data.replyCalls ?? 0
+  if (used < MAX_REPLY_CALLS && game.data.phaseEndsAt - t > 3_500 && players.some((p) => p.data.isBot && p.data.alive)) {
+    await patchGame(tools, game.id, { replyCalls: used + 1 })
+    const input = await meetingInput(tools, game, `reply:${used}`)
+    const votes = voting ? await query<VoteRow>(tools, 'votes', { gameId: game.id, meetingNo: game.data.meetingNo }) : []
+    const firm = new Set((game.data.botVotes ?? []).filter((v) => v.firm).map((v) => v.playerId))
+    const reply = await replyInMeeting(env, input, { playerId: me.id, text }, {
+      voting,
+      votes: votes.map((v) => ({ playerId: v.data.voterId, targetId: v.data.targetId, firm: firm.has(v.data.voterId) })),
     })
-    await create<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo: game.data.meetingNo, playerId: named.id, text: reply, showAt: Date.now() + 1_500 })
+    let at = Date.now() + 1_200
+    for (const line of reply.lines) {
+      await create<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo: game.data.meetingNo, playerId: line.playerId, text: line.text, showAt: at })
+      at += 1_800 + Math.round(input.rng() * 1_800)
+    }
+    // A good argument during voting can swing AI players who were not sure.
+    for (const sw of reply.switches) {
+      const row = votes.find((v) => v.data.voterId === sw.playerId)
+      if (row && row.data.targetId !== sw.targetId && !firm.has(sw.playerId)) {
+        await must(tools.update('votes', row.id, { targetId: sw.targetId, showAt: Math.max(Date.now() + 1_500, Math.min(row.data.showAt, at)) }))
+      }
+    }
   }
   return ok({ sent: true })
 }
@@ -953,15 +1107,13 @@ async function castVote({ userId, params, tools }: Ctx): Promise<ActionResult> {
   const targetId = String(params.targetId ?? '')
   if (targetId !== 'skip' && !players.some((p) => p.id === targetId && p.data.alive)) return fail('Pick a living player or skip.')
   if (targetId === me.id) return fail('You cannot vote for yourself.')
+  // Votes stay open until the timer ends, so players can change their mind.
   const existing = await query<VoteRow>(tools, 'votes', { gameId: game.id, meetingNo: game.data.meetingNo, voterId: me.id }, 1)
-  if (existing.length) return fail('You already voted.')
-  await create<VoteRow>(tools, 'votes', { gameId: game.id, meetingNo: game.data.meetingNo, voterId: me.id, targetId, showAt: Date.now() })
-  const votes = await query<VoteRow>(tools, 'votes', { gameId: game.id, meetingNo: game.data.meetingNo })
-  const alive = players.filter((p) => p.data.alive)
-  if (alive.every((p) => votes.some((v) => v.data.voterId === p.id))) {
-    // Everyone has voted: close the vote shortly so the last vote shows.
-    await patchGame(tools, game.id, { phaseEndsAt: Math.min(game.data.phaseEndsAt, Date.now() + 2_500) })
+  if (existing.length) {
+    if (existing[0].data.targetId !== targetId) await must(tools.update('votes', existing[0].id, { targetId, showAt: Date.now() }))
+    return ok({ voted: true, changed: true })
   }
+  await create<VoteRow>(tools, 'votes', { gameId: game.id, meetingNo: game.data.meetingNo, voterId: me.id, targetId, showAt: Date.now() })
   return ok({ voted: true })
 }
 
@@ -1007,7 +1159,9 @@ export const gameActions: Record<string, ActionHandler<Env>> = {
   'game-tick': guard(tick),
   'game-pos': guard(reportPos),
   'game-build': guard(buildOrder),
+  'game-build-finish': guard(finishBuild),
   'game-wreck': guard(wreck),
+  'game-wreck-finish': guard(finishWreck),
   'game-lights': guard(lightsOut),
   'game-fix-lights': guard(fixLights),
   'game-report': guard(report),
