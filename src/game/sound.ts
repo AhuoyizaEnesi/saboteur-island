@@ -24,6 +24,9 @@ export function setMuted(m: boolean) {
   }
 }
 
+/** The shared audio context, once a click or key has unlocked it. */
+export const audioContext = () => ctx
+
 /** Call from a click or key handler to allow sound. */
 export function unlockSound() {
   if (typeof window === 'undefined') return

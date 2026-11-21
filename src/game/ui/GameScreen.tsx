@@ -6,8 +6,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth, usePresenceRoom } from 'deepspace'
-import { Bell, Ghost, Hammer, Link as LinkIcon, LogOut, Megaphone, Moon, Paintbrush, Power, SendHorizontal, Sun, Sunset, Trash2, Undo2, Volume2, VolumeX, Wrench, X, Zap } from 'lucide-react'
-import { isMuted, play, setMuted, unlockSound } from '../sound'
+import { Bell, Ghost, Hammer, Link as LinkIcon, LogOut, Megaphone, Moon, Paintbrush, Power, SendHorizontal, Sun, Sunset, Trash2, Undo2, Wrench, X, Zap } from 'lucide-react'
+import { setMusicLevel, syncMusic } from '../music'
+import { play, unlockSound } from '../sound'
 import { callAction, serverNow } from '../api'
 import {
   BELL_RANGE,
@@ -34,6 +35,7 @@ import { taskTemplate } from '../tasks'
 import type { IslandScene } from '../scene/IslandScene'
 import { fmtClock, useGameData, useNow, type Rec } from '../useGame'
 import type { PlayerRow } from '../types'
+import { SoundButton } from './SoundButton'
 import { IslandView } from './IslandView'
 import { IslanderIcon } from './IslanderIcon'
 import { MiniMap } from './MiniMap'
@@ -97,9 +99,11 @@ export function GameScreen({ code }: { code: string }) {
   const nameOf = useCallback((id: string) => players.find((p) => p.id === id)?.data.name ?? 'Someone', [players])
   const colorOf = useCallback((id: string) => players.find((p) => p.id === id)?.data.color ?? SEAT_COLORS[0], [players])
 
-  const [muted, setMutedState] = useState(isMuted)
   useEffect(() => {
-    const unlock = () => unlockSound()
+    const unlock = () => {
+      unlockSound()
+      syncMusic()
+    }
     window.addEventListener('pointerdown', unlock)
     window.addEventListener('keydown', unlock)
     return () => {
@@ -107,6 +111,12 @@ export function GameScreen({ code }: { code: string }) {
       window.removeEventListener('keydown', unlock)
     }
   }, [])
+
+  // Music under the round: quiet during play, quieter while people talk.
+  useEffect(() => {
+    setMusicLevel(phase === 'lobby' ? 'off' : phase === 'meeting' || phase === 'vote' || phase === 'eject' ? 'low' : 'full')
+  }, [phase])
+  useEffect(() => () => setMusicLevel('off'), [])
 
   const flash = useCallback((text: string, good = false) => {
     setToast({ text, good })
@@ -626,6 +636,7 @@ export function GameScreen({ code }: { code: string }) {
 
   return (
     <div className={`si phase-${phase}`}>
+      <SoundButton />
       <IslandView onReady={setScene} onMyMove={onMyMove} onFail={() => setWebglFailed(true)} />
       <div className="si-vignette" />
       <div ref={visionRef} className={`si-vision ${visionR === null ? 'off' : ''} ${visionR !== null && visionR < 3 ? 'dark' : ''}`} />
@@ -836,19 +847,7 @@ export function GameScreen({ code }: { code: string }) {
                     <div className={`si-timer ${nightLeft < 60_000 && phase === 'play' ? 'low' : ''}`}>{phase === 'over' ? '0:00' : fmtClock(nightLeft)}</div>
                   )}
                 </div>
-                <div className="si-row">
-                  <SkyIcon size={30} className="si-sky" />
-                  <button
-                    className="si-icon-btn"
-                    aria-label={muted ? 'Turn sound on' : 'Mute'}
-                    onClick={() => {
-                      setMuted(!muted)
-                      setMutedState(!muted)
-                    }}
-                  >
-                    {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
-                  </button>
-                </div>
+                <SkyIcon size={30} className="si-sky" />
               </div>
               {practice ? (
                 <div className="si-small si-mt-sm">Just you and the builder. Take your time.</div>

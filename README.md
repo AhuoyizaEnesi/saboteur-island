@@ -22,7 +22,7 @@ Every task is done by writing your own prompt to an AI builder. A task is a requ
 
 ## Controls
 
-WASD or click to walk. Drag the mouse or swipe with two fingers to turn. Pinch or scroll to zoom. At a landmark, type your prompt. Walk up to smoke to report it, or ring the bell in the middle of the island.
+WASD or click to walk. Drag the mouse or swipe with two fingers to turn. Pinch or scroll to zoom. At a landmark, type your prompt. Walk up to smoke to report it, or ring the bell in the middle of the island. The speaker button in the corner mutes the music and sound effects on every screen.
 
 ## Run it
 
@@ -60,6 +60,8 @@ On Windows PowerShell, run the stress tests with `$env:STRESS=1; npm run test:un
 
 Built with React 19, three.js, Vite, the DeepSpace SDK 0.44.2, and the Vercel AI SDK with a Claude Haiku model.
 
+Music: ["Afro Beat - Instrumental Music"](https://pixabay.com/music/afrobeat-afro-beat-instrumental-music-554537/) by rediskasound on Pixabay, used under the Pixabay Content License. It plays quietly during the round and drops lower during meetings.
+
 ### DeepSpace integrations
 
 | Integration | Job |
@@ -82,4 +84,3 @@ The server decides everything that matters. The AI builder only proposes catalog
 - [SPEC.md](./SPEC.md): the full rules and numbers.
 - [ISSUES.md](./ISSUES.md): known limits, and every fix made after testing.
 - [docs/CODE-TOUR.md](./docs/CODE-TOUR.md): a walkthrough of the code.
-- [WRITEUP.md](./WRITEUP.md): the submission writeup.

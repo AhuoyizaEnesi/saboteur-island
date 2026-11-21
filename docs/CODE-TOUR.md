@@ -55,6 +55,7 @@ A map of how the game works, for reading or changing the code. Rules are in [SPE
 | Place words, default colors | `PLACES`, `DEFAULT_COLOR` in `src/game/prompting.ts` |
 | How often a person is the Impostor | `HUMAN_IMPOSTOR_WEIGHT` in `src/game/constants.ts`, used by `assignRoles` in `src/game/rules.ts` |
 | Win conditions | `decideWinner` in `src/game/rules.ts` |
+| Music track and how loud it plays | `SRC` and `GAIN` in `src/game/music.ts`; the file is `public/audio/afro-beat.mp3` |
 | What AI players say, and their personalities | `STYLES`, `planMeeting`, `replyInMeeting` and the `heuristic*` fallbacks in `src/server/meeting-ai.ts` |
 | How AI players vote | `planVotes` and `heuristicVotes` in `src/server/meeting-ai.ts` |
 

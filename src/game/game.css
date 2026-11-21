@@ -369,3 +369,13 @@
 .si-seg button:hover { color: var(--ink); }
 .si-seg button.on { background: var(--cyan); color: #06101f; }
 .si-seg button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+/* Sound: one mute button in the same corner on every game screen, above every overlay */
+.si-sound-btn { position: absolute; left: 18px; bottom: 22px; z-index: 30; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; border: 1px solid var(--line); background: var(--glass); backdrop-filter: blur(10px); color: var(--ink); cursor: pointer; }
+.si-sound-btn:hover { border-color: rgba(124, 247, 255, 0.5); }
+.si-sound-btn[aria-pressed='true'] { color: var(--muted); }
+.si-sound-btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+@media (max-width: 720px) {
+  .si-sound-btn { left: auto; bottom: auto; top: 92px; right: 10px; width: 36px; height: 36px; }
+  .phase-lobby .si-sound-btn, .phase-intro .si-sound-btn { top: auto; right: auto; left: 10px; bottom: 12px; }
+}

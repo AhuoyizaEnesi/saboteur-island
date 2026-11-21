@@ -9,7 +9,7 @@ Status: **Approved in chat on Nov 19, 2026.**
 ## 1. What DeepSpace is grading
 
 - **Deadline:** Sunday, November 22, 2026, 11:59 PM Eastern.
-- **Submit:** the live URL, the GitHub repo, and a short writeup covering what we built, which DeepSpace integrations we used, the main tradeoff, what the agent did, and what we verified.
+- **Submit:** the live URL and the GitHub repo.
 - **Bar:** a full stack, multi user app deployed on DeepSpace using at least three integrations.
 - **They look for:** a sensible scope, a main path that works on the live app, unfinished edges explained honestly, technical depth shown through working flows, readable code, protected secrets, and platform features used instead of rebuilt. Size and hours are not rewarded.
 - **Design rules from docs.deep.space/design:** landing headline of 3 to 8 words, one commanding visual, no purple gradients, no hardcoded colors in JSX, no pictograph emoji, motion that respects reduced motion, no placeholder copy.
@@ -124,7 +124,7 @@ The Impostor's builder can knock over, recolor and remove objects. The crew's bu
 - The camera follows your islander from above and behind, in the lobby too. The role reveal and the end screen use the orbit view.
 - You see other islanders within your vision circle: crew 5 units, Impostor 6 units, crew with lights out 1.8 units. Ghosts see everything.
 - Builds, landmarks and smoke are always drawn, but everything outside your circle is darkened.
-- **Known limit:** vision is drawn in the browser. Positions sit in records every player can read, so someone inspecting the raw data could see more. We accept that for a party game and say so in the writeup.
+- **Known limit:** vision is drawn in the browser. Positions sit in records every player can read, so someone inspecting the raw data could see more. We accept that for a party game and list it in ISSUES.md.
 
 ---
 
@@ -233,7 +233,7 @@ Controls: WASD or arrow keys, or click the ground to walk. Swipe sideways with t
 
 ### Movement and trust
 
-Presence carries live movement because it is fast and stores nothing. The server cannot read presence, so browsers also send a checkpoint every 1.5 seconds, and every action carries the caller's current position. The server rejects a position that is too far from the last checkpoint for the time passed. A cheater could still fake small moves. We accept that and say so in the writeup.
+Presence carries live movement because it is fast and stores nothing. The server cannot read presence, so browsers also send a checkpoint every 1.5 seconds, and every action carries the caller's current position. The server rejects a position that is too far from the last checkpoint for the time passed. A cheater could still fake small moves. We accept that and list it in ISSUES.md.
 
 ### AI cost control
 
@@ -254,6 +254,7 @@ A floating island at dusk in deep space, turning to night as the clock runs down
 - **Motion:** smooth camera moves and pop in builds. Everything checks `prefers-reduced-motion`.
 - **No emoji** anywhere in the interface. Icons come from lucide.
 - **Sound:** small synthesized effects (bell, task done, wreck, lights out, ejection), silent until the first click, with a mute button.
+- **Music:** one looping Afrobeat instrumental under the round (not the lobby). It plays quietly during play, drops lower during meetings, votes and ejections, fades instead of cutting, stops while the tab is hidden, and follows the same mute button. Track: "Afro Beat - Instrumental Music" by rediskasound on Pixabay, under the Pixabay Content License.
 
 ---
 
@@ -284,20 +285,12 @@ Peace pushes to GitHub at the end of each step, about every 3 hours. I copy the 
 | 3 | Wreck, broken spots, lights out and fix, report, bell, meeting, vote, ejection, ghosts, win checks | Two humans can play a full game |
 | 4 | AI players: routes, tasks, Impostor AI, clues, meeting dialogue | One human can play a full game as either role |
 | 5 | Vision circle, design rules pass, landing page | Passes the design rules in section 1 |
-| 6 | Tests, deploy, run sheet on the live URL, writeup | Everything in section 15 passes on the deployed app |
+| 6 | Tests, deploy, run sheet on the live URL | Everything in section 15 passes on the deployed app |
 
 **Cut order if we fall behind:** ghosts doing tasks (ghosts only watch), the wreck quick buttons, the AI reply to mentions. Steps 1 to 4 never get cut.
 
 ---
 
-## 17. Writeup notes
-
-- **What we built:** one paragraph.
-- **Integrations:** the table in section 13, with the reasons for the ones left out.
-- **Main tradeoff:** vision drawn in the browser and positions checked from client checkpoints, instead of a server streaming filtered state to each player.
-- **What the agent did:** which parts Claude wrote.
-- **What Peace verified:** the run sheet results and anything she changed.
-
-## 18. Out of scope
+## 17. Out of scope
 
 Killing, vents, more than one Impostor, settings menus, matchmaking with strangers, voice chat, mobile apps.
