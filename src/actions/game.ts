@@ -1222,6 +1222,11 @@ async function sendChat({ env, userId, params, tools }: Ctx): Promise<ActionResu
   const used = game.data.replyCalls ?? 0
   if (used < MAX_REPLY_CALLS && game.data.phaseEndsAt - t > 3_500 && players.some((p) => p.data.isBot && p.data.alive)) {
     await patchGame(tools, game.id, { replyCalls: used + 1 })
+    // AI lines planned before this message and not on screen yet are dropped,
+    // so the replies come right after it and nobody talks twice in a row.
+    const botIds = new Set(players.filter((p) => p.data.isBot).map((p) => p.id))
+    const queued = (await query<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo: game.data.meetingNo }, 200)).filter((c) => c.data.showAt > t + 500 && botIds.has(c.data.playerId))
+    for (const c of queued) await tools.remove('chat', c.id)
     const input = await meetingInput(tools, game, `reply:${used}`)
     const votes = voting ? await query<VoteRow>(tools, 'votes', { gameId: game.id, meetingNo: game.data.meetingNo }) : []
     const firm = new Set((game.data.botVotes ?? []).filter((v) => v.firm).map((v) => v.playerId))

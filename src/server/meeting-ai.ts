@@ -304,6 +304,10 @@ export async function replyInMeeting(
   const speaker = input.players.find((p) => p.id === message.playerId)
   const target = addressedBot(input, message)
   const nameOf = (id: string) => input.players.find((p) => p.id === id)?.name ?? 'skip'
+  // The AI player who spoke last lets someone else answer, unless the message is for them.
+  const history = chatBefore(input.chat ?? [], message)
+  const lastId = [...history].reverse().find((l) => bots.some((b) => b.id === l.playerId))?.playerId
+  const last = lastId && lastId !== target?.id ? bots.find((b) => b.id === lastId) : undefined
   try {
     const anthropic = createDeepSpaceAI(env, 'anthropic')
     const voteLines = opts.voting
@@ -320,6 +324,8 @@ export async function replyInMeeting(
         CHAT_STYLE,
         'A human just said something in the meeting. Write 1 or 2 replies from AI players.',
         target ? `The message is aimed at ${target.name}, so ${target.name} must answer it directly, using what they know.` : 'Pick the AI player with the most reason to answer. A second player may jump in.',
+        last ? `${last.name} spoke last, so ${last.name} does not reply this time.` : '',
+        'Each AI player speaks at most once.',
         'Answer the actual question. If asked where you were, give your place. If accused, defend yourself or push back.',
         opts.voting
           ? 'Voting is open. If the human makes a convincing case, AI players who are not sure may switch their vote. Add "switch":[{"name":"","vote":""}] with a living player name or "skip". Only switch when the argument is good.'
@@ -350,6 +356,7 @@ export async function replyInMeeting(
       if (lines.some((x) => x.playerId === p.id)) continue
       lines.push({ playerId: p.id, text: clean(l.text) })
     }
+    if (last && lines.length > 1) lines.splice(0, lines.length, ...lines.filter((l) => l.playerId !== last.id))
     // The player who was spoken to always answers.
     if (target && !lines.some((l) => l.playerId === target.id)) lines.unshift({ playerId: target.id, text: fallbackReply(target, input, message, notes.get(target.id) as Notes) })
     const switches: ReplyOutput['switches'] = []

@@ -417,6 +417,23 @@ describe('a full game through the server actions', () => {
     expect(rowsOf(t, 'builds', { gameId, playerId: me.recordId }).filter((b) => b.data.type === tpl.need.type)).toHaveLength(1)
   })
 
+  it('a message drops queued AI lines, so replies follow it in order and nobody talks twice in a row', async () => {
+    const { t, gameId } = await setup(3)
+    advance(12_000)
+    await walk(t, gameId, 'u1', { x: 1.2, z: 0.6 })
+    expect((await call(t.tools, 'game-bell', 'u1', { gameId })).success).toBe(true)
+    const sent = Date.now()
+    expect(rowsOf(t, 'chat', { gameId }).some((c) => Number(c.data.showAt) > sent + 500)).toBe(true)
+    expect((await call(t.tools, 'game-chat', 'u1', { gameId, text: 'not me' })).success).toBe(true)
+    const rows = rowsOf(t, 'chat', { gameId }).sort((a, b) => Number(a.data.showAt) - Number(b.data.showAt))
+    const mine = rows.findIndex((c) => c.data.text === 'not me')
+    const after = rows.slice(mine + 1)
+    expect(after.length).toBeGreaterThan(0)
+    expect(after.length).toBeLessThanOrEqual(2)
+    expect(new Set(after.map((c) => c.data.playerId)).size).toBe(after.length)
+    expect(after.every((c) => Number(c.data.showAt) > sent)).toBe(true)
+  })
+
   it('AI players answer a human who talks to them, and a meeting chat stays open while voting', async () => {
     const { t, gameId, players } = await setup(3)
     advance(12_000)
