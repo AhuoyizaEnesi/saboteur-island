@@ -383,3 +383,5 @@
 .si-sound-btn.global { position: fixed; left: auto; top: auto; right: 18px; bottom: 18px; z-index: 50; border-color: rgba(255, 255, 255, 0.14); background: rgba(16, 13, 40, 0.72); color: #ece9ff; }
 .si-sound-btn.global[aria-pressed='true'] { color: #a9a3d6; }
 @media (max-width: 720px) { .si-sound-btn.global { right: 12px; bottom: 12px; } }
+/* The meeting panel covers the right column on wide screens; hide what is under it so it never shows through the glass. */
+@media (min-width: 721px) { .phase-meeting .si-hud-right, .phase-vote .si-hud-right { visibility: hidden; } }

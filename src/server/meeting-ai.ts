@@ -169,6 +169,18 @@ export function chatHeat(input: MeetingInput): Map<string, number> {
   return heat
 }
 
+/**
+ * The chat before a new message. The send action saves the message before
+ * asking for replies, so the saved copy is dropped here; otherwise the model
+ * reads it twice and answers as if the player repeated themselves.
+ */
+export function chatBefore(chat: ChatLine[], message: ChatLine): ChatLine[] {
+  for (let i = chat.length - 1; i >= 0; i--) {
+    if (chat[i].playerId === message.playerId && chat[i].text === message.text) return [...chat.slice(0, i), ...chat.slice(i + 1)]
+  }
+  return chat
+}
+
 function chatLog(input: MeetingInput, max = 16): string {
   const nameOf = (id: string) => input.players.find((p) => p.id === id)?.name ?? 'someone'
   const lines = (input.chat ?? []).slice(-max)
@@ -308,7 +320,7 @@ export async function replyInMeeting(
         briefs(input, bots, notes),
         voteLines,
         'Chat so far:',
-        chatLog(input),
+        chatLog({ ...input, chat: chatBefore(input.chat ?? [], message) }),
         `New message from ${speaker?.name ?? 'someone'}: ${message.text}`,
       ]
         .filter(Boolean)

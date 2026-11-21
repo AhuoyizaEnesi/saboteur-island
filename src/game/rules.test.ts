@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { legalMove, seatSpot } from '../actions/game'
 import { __test as builder } from '../server/builder-agent'
-import { addressedBot, chatHeat, heuristicMeeting, heuristicReply, heuristicVotes, notesFor, type MeetingInput } from '../server/meeting-ai'
+import { addressedBot, chatBefore, chatHeat, heuristicMeeting, heuristicReply, heuristicVotes, notesFor, type MeetingInput } from '../server/meeting-ai'
 import { BOT_SPEED, routeDone, routePos, stayLeg, walkLeg } from './bots'
 import { ISLAND, MEETING_SPOT, POS_SLACK, WALK_SPEED } from './constants'
 import { LANDMARKS, landmarkById, walkable } from './landmarks'
@@ -439,5 +439,17 @@ describe('chatty AI and open votes', () => {
       if (out.switches.some((s) => s.playerId === 'a' && s.targetId === 'imp')) swung++
     }
     expect(swung).toBeGreaterThan(5)
+  })
+})
+
+describe('meeting replies', () => {
+  it('shows the model a new message once, not again in the chat so far', () => {
+    const chat = [
+      { playerId: 'a', text: 'nothing' },
+      { playerId: 'b', text: 'red cottage, alone' },
+      { playerId: 'a', text: 'nothing' },
+    ]
+    expect(chatBefore(chat, { playerId: 'a', text: 'nothing' })).toEqual(chat.slice(0, 2))
+    expect(chatBefore(chat.slice(0, 2), { playerId: 'c', text: 'hi' })).toEqual(chat.slice(0, 2))
   })
 })
