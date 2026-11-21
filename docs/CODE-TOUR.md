@@ -53,6 +53,7 @@ A map of how the game works, for reading or changing the code. Rules are in [SPE
 | How often the AI Impostor wrecks | `BOT_FIRST_WRECK_MS`, `BOT_WRECK_MIN_MS`, `BOT_WRECK_MAX_MS` in `src/game/constants.ts` |
 | Build, edit and wreck time | `BUILD_MS`, `EDIT_MS`, `WRECK_MS` in `src/game/constants.ts` |
 | Place words, default colors | `PLACES`, `DEFAULT_COLOR` in `src/game/prompting.ts` |
+| How often a person is the Impostor | `HUMAN_IMPOSTOR_WEIGHT` in `src/game/constants.ts`, used by `assignRoles` in `src/game/rules.ts` |
 | Win conditions | `decideWinner` in `src/game/rules.ts` |
 | What AI players say, and their personalities | `STYLES`, `planMeeting`, `replyInMeeting` and the `heuristic*` fallbacks in `src/server/meeting-ai.ts` |
 | How AI players vote | `planVotes` and `heuristicVotes` in `src/server/meeting-ai.ts` |

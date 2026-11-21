@@ -90,3 +90,6 @@ export type Phase = 'lobby' | 'intro' | 'play' | 'meeting' | 'vote' | 'eject' | 
 export type TimeOfDay = 'dawn' | 'day' | 'sunset' | 'night'
 export type Weather = 'clear' | 'rain' | 'snow' | 'fog' | 'fireflies'
 export type Role = 'crew' | 'impostor'
+
+/** How many times more likely a person is to be the Impostor than one AI player. Alone, that makes it about 1 game in 2. */
+export const HUMAN_IMPOSTOR_WEIGHT = 4

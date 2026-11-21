@@ -69,9 +69,34 @@ export function skyFor(elapsed: number): TimeOfDay {
 
 // ─── Roles ───────────────────────────────────────────────────────────────────
 
-export function assignRoles(playerIds: string[], rng: Rng): Record<string, Role> {
+/**
+ * Pick the one Impostor. People count `humanWeight` times as much as AI
+ * players, so a person gets the role more often than any one AI player.
+ * `pick` lets a solo player choose their own role.
+ */
+export function assignRoles(
+  playerIds: string[],
+  rng: Rng,
+  opts: { humans?: string[]; humanWeight?: number; pick?: { id: string; role: Role } } = {},
+): Record<string, Role> {
+  const weight = (id: string) => {
+    if (opts.pick) {
+      if (opts.pick.id === id) return opts.pick.role === 'impostor' ? 1 : 0
+      if (opts.pick.role === 'impostor') return 0
+    }
+    return opts.humans?.includes(id) ? (opts.humanWeight ?? 1) : 1
+  }
+  const total = playerIds.reduce((n, id) => n + weight(id), 0)
+  let r = rng() * total
+  let impostor = playerIds[playerIds.length - 1]
+  for (const id of playerIds) {
+    r -= weight(id)
+    if (r < 0 && weight(id) > 0) {
+      impostor = id
+      break
+    }
+  }
   const roles: Record<string, Role> = {}
-  const impostor = playerIds[Math.floor(rng() * playerIds.length)]
   for (const id of playerIds) roles[id] = id === impostor ? 'impostor' : 'crew'
   return roles
 }

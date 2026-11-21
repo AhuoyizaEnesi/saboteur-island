@@ -362,3 +362,10 @@
 @media (max-width: 720px) {
   .si-task .si-req { font-size: 11px; }
 }
+
+/* Play as: Random, Crew or Impostor, when playing alone */
+.si-seg { display: inline-flex; gap: 4px; padding: 4px; border-radius: 14px; background: var(--glass); border: 1px solid var(--line); }
+.si-seg button { font: 600 12.5px Sora, sans-serif; color: var(--muted); background: transparent; border: none; padding: 8px 14px; border-radius: 10px; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.si-seg button:hover { color: var(--ink); }
+.si-seg button.on { background: var(--cyan); color: #06101f; }
+.si-seg button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }

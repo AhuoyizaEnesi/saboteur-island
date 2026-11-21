@@ -12,7 +12,7 @@ import { landmarkById } from '../game/landmarks'
 import { makeRng } from '../game/placement'
 import { assignRoles } from '../game/rules'
 import { taskTemplate } from '../game/tasks'
-import { BUILD_MS, EDIT_MS, INTRO_MS, MEETING_MS, VOTE_GRACE_MS, VOTE_MS, EJECT_MS, PLAY_MS, WRECK_MS } from '../game/constants'
+import { BUILD_MS, EDIT_MS, HUMAN_IMPOSTOR_WEIGHT, INTRO_MS, MEETING_MS, VOTE_GRACE_MS, VOTE_MS, EJECT_MS, PLAY_MS, WRECK_MS } from '../game/constants'
 
 type Rec = { recordId: string; data: Record<string, unknown>; createdAt: string }
 
@@ -90,7 +90,8 @@ async function setup(impostorSeat: number) {
   expect((await call(t.tools, 'game-join', 'u2', { code })).success).toBe(true)
   // Choose a seed that deals the Impostor role to the seat we want.
   for (let seed = 1; seed < 5000; seed++) {
-    const roles = assignRoles(['a', 'b', 'c', 'd', 'e'], makeRng(seed ^ 0x5eed))
+    // Seats a and b are the two people, who are weighted like the real game.
+    const roles = assignRoles(['a', 'b', 'c', 'd', 'e'], makeRng(seed ^ 0x5eed), { humans: ['a', 'b'], humanWeight: HUMAN_IMPOSTOR_WEIGHT })
     if (roles[['a', 'b', 'c', 'd', 'e'][impostorSeat]] === 'impostor') {
       await t.tools.update('games', gameId, { seed })
       break
@@ -312,6 +313,30 @@ describe('a full game through the server actions', () => {
     const fixed = await call(t.tools, 'game-fix-lights', 'u1', { gameId })
     expect(fixed.success, fixed.error).toBe(true)
     expect(rowsOf(t, 'games')[0].data.lightsOutUntil).toBe(0)
+  })
+
+  it('someone playing alone can pick their role; with two people the pick is ignored', async () => {
+    for (const want of ['impostor', 'crew'] as const) {
+      for (let seed = 1; seed <= 6; seed++) {
+        const t = fakeTools()
+        const { gameId } = (await call(t.tools, 'game-create', 'u1')).data as { gameId: string }
+        await t.tools.update('games', gameId, { seed })
+        expect((await call(t.tools, 'game-start', 'u1', { gameId, role: want })).success).toBe(true)
+        const me = rowsOf(t, 'players', { gameId, userId: 'u1' })[0]
+        expect(rowsOf(t, 'secrets', { gameId, playerId: me.recordId })[0].data.role).toBe(want)
+        expect(rowsOf(t, 'secrets', { gameId }).filter((r) => r.data.role === 'impostor')).toHaveLength(1)
+      }
+    }
+    // Two people: find a seed that deals u1 the Impostor, then ask for crew. The draw stands.
+    let seed = 1
+    while (assignRoles(['a', 'b', 'c', 'd', 'e'], makeRng(seed ^ 0x5eed), { humans: ['a', 'b'], humanWeight: HUMAN_IMPOSTOR_WEIGHT }).a !== 'impostor') seed++
+    const t = fakeTools()
+    const { gameId, code } = (await call(t.tools, 'game-create', 'u1')).data as { gameId: string; code: string }
+    await call(t.tools, 'game-join', 'u2', { code })
+    await t.tools.update('games', gameId, { seed })
+    expect((await call(t.tools, 'game-start', 'u1', { gameId, role: 'crew' })).success).toBe(true)
+    const me = rowsOf(t, 'players', { gameId, userId: 'u1' })[0]
+    expect(rowsOf(t, 'secrets', { gameId, playerId: me.recordId })[0].data.role).toBe('impostor')
   })
 
   it("walking away stops a build, and a vague prompt gets the builder's defaults, a reading and a hint", async () => {

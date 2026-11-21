@@ -45,3 +45,7 @@ Peace's test feedback (Nov 20, late): the prompting felt off.
 - There was no way to see how a prompt was read. Now an "I read" card shows each part and what the builder filled in.
 - Fixing a miss meant building more on top. Now a prompt can recolor, move or remove what you built, in 3 seconds.
 - Count tasks passed with extra copies. Now they need exactly that many, and a wreck hits every object of the task so redoing the prompt restores it.
+
+Peace's feedback (Nov 21): the AI was the Impostor too often.
+- Playing alone, a person was the Impostor only 1 game in 5, because the draw was even across all 5 seats. Now each person counts 4 times as much as one AI player, so alone it is about 1 in 2.
+- Someone playing alone can now pick Random, Crew or Impostor in the lobby. With other people the pick is ignored, so nobody can tell who chose.

@@ -25,6 +25,7 @@ import {
   BOT_WRECK_MIN_MS,
   BUILD_MS,
   EDIT_MS,
+  HUMAN_IMPOSTOR_WEIGHT,
   JOB_EXPIRES_MS,
   JOB_SLACK_MS,
   MAX_REPLY_CALLS,
@@ -823,7 +824,14 @@ async function startGame({ userId, params, tools }: Ctx): Promise<ActionResult> 
   }
   const t = Date.now()
   const rng = makeRng(game.data.seed ^ 0x5eed)
-  const roles = assignRoles(players.map((p) => p.id), rng)
+  // People are the Impostor more often than AI players. Someone playing alone can pick their role.
+  const humans = players.filter((p) => !p.data.isBot)
+  const want = params.role === 'crew' || params.role === 'impostor' ? params.role : null
+  const roles = assignRoles(players.map((p) => p.id), rng, {
+    humans: humans.map((p) => p.id),
+    humanWeight: HUMAN_IMPOSTOR_WEIGHT,
+    pick: want && humans.length === 1 ? { id: humans[0].id, role: want } : undefined,
+  })
   const crew = players.filter((p) => roles[p.id] === 'crew').map((p) => p.id)
   const deal = dealTasks(crew, rng, TASKS_PER_CREW)
   for (const p of players) {

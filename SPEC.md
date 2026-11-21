@@ -31,6 +31,10 @@ Five or six islanders live on a floating island in space. The crew walk around f
 
 The Impostor gets a fake task list so they know where to pretend to work. Nothing they build ever counts as a task.
 
+**Who is the Impostor.** The draw favors people over AI players: each person counts 4 times as much as one AI player. Alone with 4 AI players, you are the Impostor about 1 game in 2 instead of 1 in 5. With 2 people, one of them is the Impostor about 3 games in 4.
+
+**Picking your role.** Someone playing alone can choose Random, Crew or Impostor in the lobby. With 2 or more people, roles are always a secret draw, and the server ignores any pick.
+
 ---
 
 ## 4. The island
@@ -160,6 +164,7 @@ These get tuned during testing.
 | Bell rings | 1 per player, locked 15 seconds after a meeting |
 | Discussion and voting | 60 seconds and 30 seconds |
 | Show whether the ejected player was the Impostor | On |
+| Impostor draw | Each person counts 4 times one AI player |
 
 ---
 
@@ -169,7 +174,7 @@ These get tuned during testing.
 |---|---|
 | Landing | Headline of 3 to 8 words, the live 3D island as the hero, a Play button |
 | Menu | Create a game, or join with a 4 letter code |
-| Lobby | Follow view so players can walk while they wait. A side panel with the code, an invite link, 6 seats, and Start for the host |
+| Lobby | Follow view so players can walk while they wait. A side panel with the code, an invite link, 6 seats, and Start for the host. When the host is the only person, a Play as choice: Random, Crew or Impostor |
 | Role reveal | Crew or Impostor in large type, with the goal in one line |
 | Play | Follow camera. Top left: task list (each task shows who asks and their request) and task bar. Top right: night clock, a small island map (your position and your task landmarks, never other players), and the player list. Bottom right: action buttons that light up in range (Build, Report, Fix lights, Bell). Top center: alerts |
 | Practice | From the menu: Practice with the builder. A solo round with 4 tasks at different landmarks, no Impostor, no AI players, no meetings and no night clock. The clock card says Practice. It ends when every task is done, with the first prompt score and Practice again |

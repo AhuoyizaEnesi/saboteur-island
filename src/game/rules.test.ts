@@ -314,6 +314,31 @@ describe('tasks as requests', () => {
   })
 })
 
+describe('who is the Impostor', () => {
+  const ids = ['me', 'b1', 'b2', 'b3', 'b4']
+  const share = (opts: Parameters<typeof assignRoles>[2], who: (r: Record<string, string>) => boolean) => {
+    let n = 0
+    for (let seed = 1; seed <= 4000; seed++) if (who(assignRoles(ids, makeRng(seed), opts))) n++
+    return n / 4000
+  }
+  it('deals exactly one Impostor', () => {
+    for (let seed = 1; seed < 200; seed++) expect(Object.values(assignRoles(ids, makeRng(seed), { humans: ['me'], humanWeight: 4 })).filter((r) => r === 'impostor')).toHaveLength(1)
+  })
+  it('makes a person playing alone the Impostor about half the time, not 1 in 5', () => {
+    expect(share({}, (r) => r.me === 'impostor')).toBeCloseTo(0.2, 1)
+    expect(share({ humans: ['me'], humanWeight: 4 }, (r) => r.me === 'impostor')).toBeCloseTo(0.5, 1)
+  })
+  it('with two people, one of them is the Impostor most games', () => {
+    expect(share({ humans: ['me', 'b1'], humanWeight: 4 }, (r) => r.me === 'impostor' || r.b1 === 'impostor')).toBeCloseTo(8 / 11, 1)
+  })
+  it('honors a solo pick', () => {
+    for (let seed = 1; seed < 100; seed++) {
+      expect(assignRoles(ids, makeRng(seed), { humans: ['me'], humanWeight: 4, pick: { id: 'me', role: 'impostor' } }).me).toBe('impostor')
+      expect(assignRoles(ids, makeRng(seed), { humans: ['me'], humanWeight: 4, pick: { id: 'me', role: 'crew' } }).me).toBe('crew')
+    }
+  })
+})
+
 describe('reading a prompt', () => {
   it('finds place words in the order they are said', () => {
     expect(placesIn('a yellow bird on the roof')).toEqual(['roof'])

@@ -71,6 +71,8 @@ export function GameScreen({ code }: { code: string }) {
   /** The leave / end menu, and which choice is waiting for its second click. */
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirming, setConfirming] = useState<'leave' | 'end' | null>(null)
+  // Someone playing alone can choose their role; with other people it is always dealt.
+  const [playAs, setPlayAs] = useState<'random' | 'crew' | 'impostor'>('random')
   useEffect(() => {
     if (!confirming) return
     const id = window.setTimeout(() => setConfirming(null), 4_000)
@@ -668,12 +670,29 @@ export function GameScreen({ code }: { code: string }) {
                 )
               })}
             </div>
+            {isHost && players.filter((p) => !p.data.isBot).length === 1 && (
+              <div className="si-mt">
+                <div className="si-eyebrow">Play as</div>
+                <div className="si-seg" role="radiogroup" aria-label="Play as">
+                  {(['random', 'crew', 'impostor'] as const).map((r) => (
+                    <button key={r} type="button" role="radio" aria-checked={playAs === r} className={playAs === r ? 'on' : ''} onClick={() => setPlayAs(r)}>
+                      {r === 'random' ? 'Random' : r === 'crew' ? 'Crew' : 'Impostor'}
+                    </button>
+                  ))}
+                </div>
+                <p className="si-small si-gap">You are playing alone, so you can pick. With friends in the game, roles are always a secret draw.</p>
+              </div>
+            )}
             <div className="si-row si-between si-mt">
               <button className="si-btn" disabled={busy === 'leave'} onClick={leave}>
                 <LogOut size={15} /> {confirming === 'leave' ? 'Click again to leave' : 'Leave'}
               </button>
               {isHost ? (
-                <button className="si-btn primary big" disabled={busy === 'start'} onClick={() => act('game-start', {}, 'start')}>
+                <button
+                  className="si-btn primary big"
+                  disabled={busy === 'start'}
+                  onClick={() => act('game-start', players.filter((p) => !p.data.isBot).length === 1 ? { role: playAs } : {}, 'start')}
+                >
                   {busy === 'start' ? 'Dealing roles...' : 'Start the game'}
                 </button>
               ) : (
