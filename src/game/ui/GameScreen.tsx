@@ -62,6 +62,7 @@ export function GameScreen({ code }: { code: string }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [orderFor, setOrderFor] = useState<Landmark | null>(null)
   const [orderText, setOrderText] = useState('')
+  const orderInput = useRef<HTMLInputElement>(null)
   const [wreckText, setWreckText] = useState('')
   /** A build or wreck in progress: the player has to stay at the landmark until it lands. */
   const [job, setJob] = useState<{ kind: 'build' | 'wreck'; landmarkId: string; t0: number; ms: number; text: string; reading?: string[] } | null>(null)
@@ -462,6 +463,11 @@ export function GameScreen({ code }: { code: string }) {
   useEffect(() => {
     if (phase !== 'play' && job) cancelJob()
   }, [phase, job, cancelJob])
+
+  // The box is disabled while a build runs; put the cursor back after, so a fix can be typed right away.
+  useEffect(() => {
+    if (!job && orderFor && !isImpostor) orderInput.current?.focus()
+  }, [job, orderFor, isImpostor])
 
   // The box starts empty: turning the task into a prompt is the player's job.
   const openOrder = useCallback((l: Landmark) => {
@@ -1009,6 +1015,7 @@ export function GameScreen({ code }: { code: string }) {
                   }}
                 >
                   <input
+                    ref={orderInput}
                     autoFocus={!isImpostor}
                     value={orderText}
                     maxLength={ORDER_MAX_CHARS}

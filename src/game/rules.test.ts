@@ -8,7 +8,7 @@ import { LANDMARKS, landmarkById, walkable } from './landmarks'
 import { footprint, makeRng, placeOne, type PlacedLike } from './placement'
 import { assignRoles, decideWinner, makeCode, normalizeCode, skyFor, tally } from './rules'
 import { dealTasks, explainMiss, fakeTasks, needLabel, slotOf, spotAtLandmark, taskDone, TASKS, taskTemplate } from './tasks'
-import { DEFAULT_COLOR, placesIn, readingLines, saidColor, saidCount } from './prompting'
+import { askedForPlace, DEFAULT_COLOR, placesIn, readingLines, saidColor, saidCount } from './prompting'
 import { streamInfo } from './terrain'
 
 describe('tally', () => {
@@ -469,5 +469,15 @@ describe('meeting notes', () => {
     const names = LANDMARKS.map((l) => l.name)
     const noPlace = notesFor(input.players[1], { ...input, workedAt: {} }).lines.join(' ')
     expect(names.some((n) => noPlace.includes(`at the ${n}`))).toBe(true)
+  })
+})
+
+describe('place words', () => {
+  it('know when a prompt asked for a place that is not there', () => {
+    expect(askedForPlace('two birds on the fence', 'Orchard')).toBe(true)
+    expect(askedForPlace('a duck in the pond', 'Orchard')).toBe(true)
+    expect(askedForPlace('a tree', 'Orchard')).toBe(false)
+    expect(askedForPlace('a duck by the orchard', 'Orchard')).toBe(false)
+    expect(askedForPlace('two tents the color of a pumpkin', 'Camp')).toBe(false)
   })
 })

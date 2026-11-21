@@ -95,7 +95,7 @@ class ItemList {
 }
 
 export function describeItems(items: BuildItem[]): string {
-  if (!items.length) return 'Nothing in that order matched something I can build.'
+  if (!items.length) return 'Nothing in that order is something I can build. Try trees, lanterns, fences, boats, tents, ducks or birds.'
   const groups: { type: BuildType; color: ColorName | null; n: number }[] = []
   for (const it of items) {
     const g = groups.find((x) => x.type === it.type && x.color === it.color)
@@ -127,7 +127,9 @@ export async function runBuilderAgent(
         'Use place_object for new things. When the order is about things the player already built here (it, them, the bird), use recolor, move or remove instead.',
         'Everything goes at that landmark; the server picks exact spots from the place words in the order.',
         'Follow the order literally. Never judge, refuse, add extras or question the player. Never guess what they meant.',
-        'If something is not in the catalog, use the closest catalog item. Only use colors from the color list, and only when the order names one.',
+        'Use a catalog item only for the same kind of thing (oak means round_tree, puppy means dog). If nothing in the catalog is that kind of thing, skip it and do not place a substitute.',
+        'A plain "tree" or "trees" means round_tree. Only use pine_tree when the order says pine, fir or christmas tree.',
+        'Only use colors from the color list, and only when the order names one.',
         `Place at most ${MAX_ITEMS_PER_ORDER} objects. If the order says how many, use exactly that. If not, use 1 for a singular word and 3 for a plural word like "ducks".`,
         'When done, reply with one plain sentence under 14 words saying what you did. No emojis, no dashes.',
         '',
@@ -175,6 +177,8 @@ export async function runBuilderAgent(
         }),
       },
     })
+    // A plain "tree" is always a round tree, so the same prompt gives the same result.
+    if (!/\b(pine|fir|christmas)\b/i.test(input.text)) for (const it of list.items) if (it.type === 'pine_tree') it.type = 'round_tree'
     const ops = [...edits, ...groupAdds(list.items)]
     if (!ops.length) return keywordBuild(input)
     return { items: list.items, ops, narration: lastLine(result.text) || describeItems(list.items), usedModel: true }

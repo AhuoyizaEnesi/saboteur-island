@@ -64,7 +64,7 @@ import { LANDMARKS, landmarkById, nearestLandmark, walkable, type Landmark } fro
 import { hashString, makeRng, placeOne, type PlacedLike, type Rng } from '../game/placement'
 import { assignRoles, decideWinner, makeCode, normalizeCode, skyFor, tally } from '../game/rules'
 import { dealTasks, explainMiss, fakeTasks, placeAnchors, spotAtLandmark, taskDone, taskTemplate } from '../game/tasks'
-import { DEFAULT_COLOR, PLACES, placesIn, readingLines, type PlaceTag } from '../game/prompting'
+import { askedForPlace, DEFAULT_COLOR, PLACES, placesIn, readingLines, type PlaceTag } from '../game/prompting'
 import type {
   BreakRow,
   BuildRow,
@@ -1006,7 +1006,7 @@ async function buildOrder(ctx: Ctx): Promise<ActionResult> {
       const at = places.map((tag) => anchors.find((a) => a.tag === tag && a.type === op.type) ?? anchors.find((a) => a.tag === tag)).find(Boolean)
       // The builder never sees the hidden task, so a color it read ("lemon colored" as yellow) is the player's own.
       const color = op.color ?? DEFAULT_COLOR[op.type] ?? null
-      reading.push(...readingLines({ type: op.type, count: op.count, color, colorSaid: Boolean(op.color), place: at?.tag ?? null, placeSaid: places.length > 0, landmarkName: landmark.name }))
+      reading.push(...readingLines({ type: op.type, count: op.count, color, colorSaid: Boolean(op.color), place: at?.tag ?? null, placeSaid: askedForPlace(text, landmark.name), landmarkName: landmark.name }))
     } else {
       const targets = editTargets(mine, op.type)
       // "your bench", "your 2 fences"
@@ -1097,6 +1097,13 @@ async function finishBuild(ctx: Ctx): Promise<ActionResult> {
     if (!tpl) continue
     const line = explainMiss(tpl, builds, (t.data.tries ?? 0) >= 2)
     if (line) feedback.push(line)
+  }
+  // A finished task this build undid, like one tree too many: say so, with the exact ask.
+  for (const t of before) {
+    if (t.data.status !== 'done' || completed.includes(t.data.templateId)) continue
+    const tpl = taskTemplate(t.data.templateId)
+    const line = tpl && explainMiss(tpl, builds, true)
+    if (line) feedback.push(`That undid a finished task. ${line}`)
   }
   if (res.total && res.count >= res.total) await finishIfOver(tools, game)
   return ok({ narration: job.narration, placed, completed, feedback, reading: job.reading ?? [] })

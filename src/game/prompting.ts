@@ -34,6 +34,24 @@ export function placesIn(text: string): PlaceTag[] {
     .map((x) => x.tag)
 }
 
+const PLACE_PHRASE = /\b(?:on|onto|in|into|inside|by|at|near|next to|beside|behind|under|above|around|over|along)\s+(?:the|a|an|my|your|this|that|our)\s+([a-z]+)/g
+const NOT_A_SPOT = new Set(['island', 'landmark', 'left', 'right', 'middle', 'center', 'centre', 'side', 'back', 'same', 'color', 'colour', 'shape', 'end'])
+
+/**
+ * Did the prompt ask for a place, known or not? "on the fence" asks for one
+ * even though there is no fence spot, so the card can say it was not found
+ * instead of "you didn't say". The landmark's own name ("by the Orchard") is
+ * not a spot of its own.
+ */
+export function askedForPlace(text: string, landmarkName = ''): boolean {
+  if (placesIn(text).length) return true
+  const lm = landmarkName.toLowerCase().split(/\s+/)
+  for (const m of text.toLowerCase().matchAll(PLACE_PHRASE)) {
+    if (!lm.includes(m[1]) && !NOT_A_SPOT.has(m[1])) return true
+  }
+  return false
+}
+
 /** The builder's own color when a prompt names none. Null keeps the object's natural look. */
 export const DEFAULT_COLOR: Partial<Record<BuildType, ColorName>> = {
   bird: 'brown',

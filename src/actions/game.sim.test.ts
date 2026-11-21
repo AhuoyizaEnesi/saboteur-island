@@ -11,7 +11,7 @@ import { gameActions } from './game'
 import { landmarkById } from '../game/landmarks'
 import { makeRng } from '../game/placement'
 import { assignRoles } from '../game/rules'
-import { taskTemplate } from '../game/tasks'
+import { TASKS, taskTemplate } from '../game/tasks'
 import { BUILD_MS, CHAT_MAX_CHARS, EDIT_MS, HUMAN_IMPOSTOR_WEIGHT, INTRO_MS, MAX_BUILDS_PER_GAME, MAX_ITEMS_PER_ORDER, MAX_REPLY_CALLS, MEETING_MS, ORDER_COOLDOWN_MS, VOTE_GRACE_MS, VOTE_MS, EJECT_MS, PLAY_MS, WRECK_MS } from '../game/constants'
 
 type Rec = { recordId: string; data: Record<string, unknown>; createdAt: string }
@@ -388,6 +388,25 @@ describe('a full game through the server actions', () => {
     advance(5000)
     const right = await build(t, gameId, 'u1', lm.id, tpl.order)
     expect((right.data?.completed as string[]) ?? []).toContain(tpl.id)
+  })
+
+  it('building one too many on a finished count task undoes it and says so', async () => {
+    const { t, gameId, players } = await setup(2)
+    const me = players[0]
+    const tpl = TASKS.find((x) => (x.need.count ?? 1) > 1 && !x.need.place)!
+    const tasks = rowsOf(t, 'tasks', { gameId, playerId: me.recordId })
+    const task = tasks[0]
+    for (const x of tasks) if (x !== task && x.data.landmarkId === tpl.landmarkId) Object.assign(x.data, { templateId: 'mill_sheep', landmarkId: 'windmill' })
+    Object.assign(task.data, { templateId: tpl.id, landmarkId: tpl.landmarkId })
+    const lm = landmarkById(tpl.landmarkId)!
+    await walk(t, gameId, 'u1', { x: lm.x * (1 - 1.6 / Math.hypot(lm.x, lm.z)), z: lm.z * (1 - 1.6 / Math.hypot(lm.x, lm.z)) })
+    advance(5000)
+    expect(((await build(t, gameId, 'u1', lm.id, tpl.order)).data?.completed as string[]) ?? []).toContain(tpl.id)
+    advance(5000)
+    const extra = await build(t, gameId, 'u1', lm.id, `one more ${tpl.need.color ?? ''} ${tpl.need.type.replace('_', ' ')}`)
+    expect(extra.success, extra.error).toBe(true)
+    expect(((extra.data?.feedback as string[]) ?? []).join(' ')).toMatch(/That undid a finished task\. .*wants/)
+    expect(rowsOf(t, 'tasks', { gameId }).find((x) => x.recordId === task.recordId)?.data.status).not.toBe('done')
   })
 
   it('edits change what you built: a recolor finishes a color task in the short edit time', async () => {
