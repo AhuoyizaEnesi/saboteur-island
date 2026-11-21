@@ -24,7 +24,7 @@ Non blocking issues logged during the build. Fixed items move to the bottom with
 
 Peace's test feedback (Nov 20):
 - The AI Impostor wrecked too fast: up to 13 wrecks a game. Now its first wreck waits 75 seconds and the next ones come every 60 to 80 seconds, with lights out at most twice. A sim game showed 3 wrecks and 2 lights outs.
-- The order box filled in the prompt. Now it starts empty, shows the task details, and the builder makes up any detail a vague prompt leaves out (right 1 time in 3), with a line explaining the miss.
+- The order box filled in the prompt. Now it starts empty and shows the task.
 - Wrecks were instant. Builds now take 8 seconds and wrecks 4, standing at the landmark. Walking away cancels both.
 - AI players only answered when named, once. Now every human message gets 1 or 2 replies, the AI player spoken to always answers with its own alibi, and opening lines are a back and forth.
 - Nobody got ejected: AI votes were locked when the meeting opened and unsure crew always skipped. Now AI players vote after the whole discussion, follow a strong case, can be swayed during voting, and everyone can change their vote until time runs out.
@@ -36,3 +36,12 @@ Peace's test feedback (Nov 20, evening):
 - Voting waited out the full timer. It now closes 3 seconds after everyone has voted.
 - The camera angle was fixed. Dragging now turns it, and the movement keys follow the camera.
 - There was no way to leave or end a game. Added Leave (an AI takes over) and End game for the host.
+- Testing prompts meant playing a whole game around wrecks and meetings. Added Practice: just you and the builder, 4 tasks, no clock.
+
+Peace's test feedback (Nov 20, late): the prompting felt off.
+- Tasks spelled out the answer, so writing a prompt was copying. Now each task is a request in someone's words that hints at the details ("the color of a lemon").
+- Where things went did not depend on the prompt. Now place words decide it, and some tasks check the place.
+- A vague prompt got a coin flip, right 1 time in 3, which felt random. Now the builder uses the same default every time (a bird comes out brown) and never sees the task.
+- There was no way to see how a prompt was read. Now an "I read" card shows each part and what the builder filled in.
+- Fixing a miss meant building more on top. Now a prompt can recolor, move or remove what you built, in 3 seconds.
+- Count tasks passed with extra copies. Now they need exactly that many, and a wreck hits every object of the task so redoing the prompt restores it.

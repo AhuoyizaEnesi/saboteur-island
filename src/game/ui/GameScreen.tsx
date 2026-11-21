@@ -12,6 +12,7 @@ import { callAction, serverNow } from '../api'
 import {
   BELL_RANGE,
   BUILD_MS,
+  EDIT_MS,
   CHAT_MAX_CHARS,
   CHECKPOINT_MS,
   EJECT_MS,
@@ -61,10 +62,10 @@ export function GameScreen({ code }: { code: string }) {
   const [orderText, setOrderText] = useState('')
   const [wreckText, setWreckText] = useState('')
   /** A build or wreck in progress: the player has to stay at the landmark until it lands. */
-  const [job, setJob] = useState<{ kind: 'build' | 'wreck'; landmarkId: string; t0: number; ms: number; text: string } | null>(null)
+  const [job, setJob] = useState<{ kind: 'build' | 'wreck'; landmarkId: string; t0: number; ms: number; text: string; reading?: string[] } | null>(null)
   const jobToken = useRef(0)
   /** What the last order did, shown in the order box so the player can fix the prompt. */
-  const [result, setResult] = useState<{ text: string; feedback: string[]; good: boolean } | null>(null)
+  const [result, setResult] = useState<{ text: string; feedback: string[]; good: boolean; reading?: string[] } | null>(null)
   const [chatText, setChatText] = useState('')
   const [hideOver, setHideOver] = useState(false)
   /** The leave / end menu, and which choice is waiting for its second click. */
@@ -345,7 +346,13 @@ export function GameScreen({ code }: { code: string }) {
     const first = lastPhase.current === ''
     lastPhase.current = key
     if (first) return
-    if (phase === 'play' && g.meetingNo === 0) setBanner({ key: Date.now(), title: 'Fix up the island', sub: 'Night falls in 7 minutes', tone: 'crew' })
+    if (phase === 'play' && g.meetingNo === 0) {
+      setBanner(
+        g.mode === 'practice'
+          ? { key: Date.now(), title: 'Practice your prompts', sub: 'Walk to a task and tell the builder what to make', tone: 'crew' }
+          : { key: Date.now(), title: 'Fix up the island', sub: 'Night falls in 7 minutes', tone: 'crew' },
+      )
+    }
     else if (phase === 'play') setBanner({ key: Date.now(), title: 'Back to work', sub: 'The night clock is running again', tone: 'crew' })
     else if (phase === 'meeting') {
       setOrderFor(null)
@@ -466,8 +473,10 @@ export function GameScreen({ code }: { code: string }) {
       if (r?.narration) setResult({ text: String(r.narration), feedback: [], good: false })
       return null
     }
-    setJob((j) => (j ? { ...j, text: String(r.narration ?? '') } : j))
-    const wait = Math.max(t0 + ms - Date.now(), Number(r.readyIn ?? 0))
+    // Edits to things already built are quicker; the server says how long this one takes.
+    const realMs = Number(r.ms) > 0 ? Number(r.ms) : ms
+    setJob((j) => (j ? { ...j, ms: realMs, text: String(r.narration ?? ''), reading: (r.reading as string[] | undefined) ?? [] } : j))
+    const wait = Math.max(t0 + realMs - Date.now(), Number(r.readyIn ?? 0))
     await new Promise((res) => window.setTimeout(res, Math.max(0, wait)))
     if (jobToken.current !== token) return null
     const finish = kind === 'build' ? 'game-build-finish' : 'game-wreck-finish'
@@ -494,8 +503,8 @@ export function GameScreen({ code }: { code: string }) {
     const feedback = (f.feedback as string[] | undefined) ?? []
     play('pop')
     if (feedback.length) {
-      // A miss: keep the box open with the player's own prompt so they can fix it.
-      setResult({ text: String(f.narration ?? 'Built.'), feedback, good: done.length > 0 })
+      // A miss: keep the box open with the player's own prompt, and how it was read, so they can fix it.
+      setResult({ text: String(f.narration ?? 'Built.'), feedback, good: done.length > 0, reading: (f.reading as string[] | undefined) ?? [] })
       return
     }
     flash(done.length ? `Task done. ${String(f.narration ?? '')}` : String(f.narration ?? 'Built.'), done.length > 0)
@@ -562,8 +571,10 @@ export function GameScreen({ code }: { code: string }) {
   })
 
   // ─── derived view data ────────────────────────────────────────────────────
+  const practice = g?.mode === 'practice'
   const nightLeft = g ? (playing ? g.nightAt - now : phase === 'meeting' || phase === 'vote' || phase === 'eject' ? g.playMsLeft : 0) : 0
-  const elapsed = 1 - Math.max(0, Math.min(1, nightLeft / PLAY_MS))
+  // Practice has no clock: keep it a bright afternoon.
+  const elapsed = practice ? 0.2 : 1 - Math.max(0, Math.min(1, nightLeft / PLAY_MS))
   const SkyIcon = elapsed < 0.45 ? Sun : elapsed < 0.85 ? Sunset : Moon
   const taskPct = g && g.tasksTotal ? Math.round((g.tasksDone / g.tasksTotal) * 100) : 0
   const fakeList = isImpostor && Array.isArray(mySecret?.data.fakeTasks) ? (mySecret?.data.fakeTasks as string[]) : []
@@ -713,10 +724,10 @@ export function GameScreen({ code }: { code: string }) {
             {menuOpen && phase !== 'over' && me && (
               <div className="si-card si-gamemenu">
                 <button className="si-btn" disabled={busy === 'leave'} onClick={leave}>
-                  <LogOut size={15} /> {confirming === 'leave' ? 'Click again to leave' : 'Leave game'}
+                  <LogOut size={15} /> {confirming === 'leave' ? 'Click again to leave' : practice ? 'Leave practice' : 'Leave game'}
                 </button>
-                <span className="si-small">An AI player takes over your islander.</span>
-                {isHost && (
+                {!practice && <span className="si-small">An AI player takes over your islander.</span>}
+                {isHost && !practice && (
                   <>
                     <button className="si-btn red si-mt-sm" disabled={busy === 'end'} onClick={endForAll}>
                       <Power size={15} /> {confirming === 'end' ? 'Click again to end it for everyone' : 'End game for everyone'}
@@ -735,9 +746,10 @@ export function GameScreen({ code }: { code: string }) {
                       <div key={id} className="si-task fake">
                         <span className="box" />
                         <span>
-                          <em>{landmarkById(t.landmarkId)?.name}</em>
-                          <b>{t.text}</b>
-                          <small>{t.reason}</small>
+                          <em>
+                            {landmarkById(t.landmarkId)?.name} · {t.who}
+                          </em>
+                          <span className="si-req">{t.request}</span>
                         </span>
                       </div>
                     ) : null
@@ -749,9 +761,16 @@ export function GameScreen({ code }: { code: string }) {
                       <div key={task.id} className={`si-task ${task.data.status}`}>
                         <span className="box">{task.data.status === 'done' ? '✓' : task.data.status === 'broken' ? '!' : ''}</span>
                         <span>
-                          <em>{task.data.status === 'broken' ? `Wrecked at the ${landmarkById(t.landmarkId)?.name}` : landmarkById(t.landmarkId)?.name}</em>
-                          <b>{t.text}</b>
-                          {task.data.status !== 'done' && <small>{task.data.status === 'broken' ? 'Go back and build it again.' : t.reason}</small>}
+                          <em>
+                            {task.data.status === 'broken' ? `Wrecked at the ${landmarkById(t.landmarkId)?.name}` : landmarkById(t.landmarkId)?.name} · {t.who}
+                          </em>
+                          {task.data.status === 'done' ? (
+                            <b>Done: {t.text}</b>
+                          ) : task.data.status === 'broken' ? (
+                            <span className="si-req">Someone wrecked it. Go back and build it again: {t.text}.</span>
+                          ) : (
+                            <span className="si-req">{t.request}</span>
+                          )}
                         </span>
                       </div>
                     )
@@ -790,8 +809,12 @@ export function GameScreen({ code }: { code: string }) {
             <div className="si-card">
               <div className="si-row si-between">
                 <div>
-                  <div className="si-eyebrow si-tight">{phase === 'over' ? 'Game over' : phase === 'play' ? 'Night falls in' : 'Clock paused'}</div>
-                  <div className={`si-timer ${nightLeft < 60_000 && phase === 'play' ? 'low' : ''}`}>{phase === 'over' ? '0:00' : fmtClock(nightLeft)}</div>
+                  <div className="si-eyebrow si-tight">{practice ? 'Practice' : phase === 'over' ? 'Game over' : phase === 'play' ? 'Night falls in' : 'Clock paused'}</div>
+                  {practice ? (
+                    <div className="si-timer si-practice-timer">No clock</div>
+                  ) : (
+                    <div className={`si-timer ${nightLeft < 60_000 && phase === 'play' ? 'low' : ''}`}>{phase === 'over' ? '0:00' : fmtClock(nightLeft)}</div>
+                  )}
                 </div>
                 <div className="si-row">
                   <SkyIcon size={30} className="si-sky" />
@@ -807,9 +830,13 @@ export function GameScreen({ code }: { code: string }) {
                   </button>
                 </div>
               </div>
-              <div className="si-skybar">
-                <i style={{ width: `${Math.round(elapsed * 100)}%` }} />
-              </div>
+              {practice ? (
+                <div className="si-small si-mt-sm">Just you and the builder. Take your time.</div>
+              ) : (
+                <div className="si-skybar">
+                  <i style={{ width: `${Math.round(elapsed * 100)}%` }} />
+                </div>
+              )}
             </div>
             {(playing || phase === 'meeting' || phase === 'vote') && (
               <div className="si-card si-map-card">
@@ -846,7 +873,7 @@ export function GameScreen({ code }: { code: string }) {
                   <Wrench size={16} /> Fix the lights
                 </button>
               )}
-              {nearBell && (
+              {nearBell && !practice && (
                 <button className="si-btn red" disabled={(me.data.bellsLeft ?? 0) <= 0 || busy === 'bell' || (g?.bellLockUntil ?? 0) > now} onClick={ringBell}>
                   <Bell size={16} /> {(me.data.bellsLeft ?? 0) > 0 ? 'Ring the bell' : 'Bell already used'}
                 </button>
@@ -861,7 +888,7 @@ export function GameScreen({ code }: { code: string }) {
                   <Ghost size={13} /> You are a ghost. Finish your tasks to help the crew.
                 </>
               ) : (
-                'WASD or click to walk. Drag to turn the camera. Walk up to a landmark to work there.'
+                'WASD or click to walk. Swipe with two fingers or drag to look around. Walk up to a landmark to work there.'
               )}
             </div>
           )}
@@ -893,9 +920,8 @@ export function GameScreen({ code }: { code: string }) {
                   return here.map((t) =>
                     t ? (
                       <div key={t.id} className="si-taskhere">
-                        <div className="si-eyebrow si-tight">{isImpostor ? 'Your fake task here' : 'Your task here'}</div>
-                        <b>{t.text}</b>
-                        <span>{t.reason}</span>
+                        <div className="si-eyebrow si-tight">{isImpostor ? `Fake task: ${t.who} asks` : `${t.who} asks`}</div>
+                        <span className="si-req">{t.request}</span>
                       </div>
                     ) : null,
                   )
@@ -937,18 +963,23 @@ export function GameScreen({ code }: { code: string }) {
                     </svg>
                     <div>
                       <b>
-                        {job.kind === 'build' ? 'Building' : 'Wrecking'} {Math.max(0, Math.ceil((job.t0 + job.ms - Date.now()) / 1000))}s
+                        {job.kind === 'wreck' ? 'Wrecking' : job.ms <= EDIT_MS ? 'Changing' : 'Building'} {Math.max(0, Math.ceil((job.t0 + job.ms - Date.now()) / 1000))}s
                       </b>
-                      <span>{job.text.replace(/^Built /, 'Making ').replace(/\.+$/, '')}. Stay here until it is done.</span>
+                      {job.reading?.length ? (
+                        job.reading.map((l) => <span key={l}>{l}</span>)
+                      ) : (
+                        <span>{job.kind === 'build' ? 'The builder is reading your prompt' : job.text.replace(/\.+$/, '')}. Stay here until it is done.</span>
+                      )}
                     </div>
                   </div>
                 )}
                 {result && !job && (
                   <div className={`si-result ${result.good ? 'good' : ''}`} role="status" aria-live="polite">
-                    <b>{result.text}</b>
+                    {result.reading?.length ? result.reading.map((l) => <i key={l}>{l}</i>) : <b>{result.text}</b>}
                     {result.feedback.map((f) => (
                       <span key={f}>{f}</span>
                     ))}
+                    <small>Try again, or fix it: "make it yellow", "move them to the pond", "remove one".</small>
                   </div>
                 )}
                 <form
@@ -963,14 +994,14 @@ export function GameScreen({ code }: { code: string }) {
                     value={orderText}
                     maxLength={ORDER_MAX_CHARS}
                     onChange={(e) => setOrderText(e.target.value)}
-                    placeholder="Write your prompt: what should the builder make?"
+                    placeholder="Write your prompt: what, how many, what color, and where"
                     disabled={!!job}
                   />
                   <button className="si-send" type="submit" disabled={!orderText.trim() || !!job} aria-label="Build">
                     <SendHorizontal size={18} />
                   </button>
                 </form>
-                <div className="si-small si-mt-sm">The builder follows your words. Anything you leave out, it guesses. Esc to close.</div>
+                <div className="si-small si-mt-sm">The builder follows your words. Anything you leave out, it fills in its own way. Esc to close.</div>
               </div>
             </div>
           )}
@@ -1073,9 +1104,15 @@ export function GameScreen({ code }: { code: string }) {
       {g && phase === 'over' && showOver && !hideOver && (
         <div className="si-overlay dim">
           <div className="si-panel">
-            <div className={`si-eyebrow ${g.winner === 'crew' ? 'good' : g.winner ? 'bad' : ''}`}>{g.winner === 'crew' ? 'Crew wins' : g.winner ? 'Impostor wins' : 'Game ended'}</div>
+            <div className={`si-eyebrow ${g.winner === 'crew' ? 'good' : g.winner ? 'bad' : ''}`}>
+              {practice ? 'Practice' : g.winner === 'crew' ? 'Crew wins' : g.winner ? 'Impostor wins' : 'Game ended'}
+            </div>
             <h2>
-              {!g.winner
+              {practice
+                ? g.winner
+                  ? 'Practice complete'
+                  : 'Practice ended'
+                : !g.winner
                 ? 'No winner this time'
                 : role
                   ? (g.winner === 'crew') === (role === 'crew')
@@ -1118,7 +1155,18 @@ export function GameScreen({ code }: { code: string }) {
                 <Link className="si-btn" to="/play">
                   Menu
                 </Link>
-                {g.nextCode ? (
+                {practice ? (
+                  <button
+                    className="si-btn primary"
+                    disabled={busy === 'practice'}
+                    onClick={async () => {
+                      const r = await act('game-practice', {}, 'practice')
+                      if (r && typeof r.code === 'string') navigate(`/g/${r.code}`)
+                    }}
+                  >
+                    Practice again
+                  </button>
+                ) : g.nextCode ? (
                   <button className="si-btn primary" onClick={() => navigate(`/g/${g.nextCode}`)}>
                     Join the rematch
                   </button>

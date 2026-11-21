@@ -24,9 +24,11 @@ import {
   BOT_WRECK_MAX_MS,
   BOT_WRECK_MIN_MS,
   BUILD_MS,
+  EDIT_MS,
   JOB_EXPIRES_MS,
   JOB_SLACK_MS,
   MAX_REPLY_CALLS,
+  PRACTICE_TASKS,
   VOTE_GRACE_MS,
   WRECK_MS,
   BELLS_PER_PLAYER,
@@ -60,7 +62,8 @@ import {
 import { LANDMARKS, landmarkById, nearestLandmark, walkable, type Landmark } from '../game/landmarks'
 import { hashString, makeRng, placeOne, type PlacedLike, type Rng } from '../game/placement'
 import { assignRoles, decideWinner, makeCode, normalizeCode, skyFor, tally } from '../game/rules'
-import { dealTasks, explainMiss, fakeTasks, spotAtLandmark, taskDone, taskTemplate } from '../game/tasks'
+import { dealTasks, explainMiss, fakeTasks, placeAnchors, spotAtLandmark, taskDone, taskTemplate } from '../game/tasks'
+import { DEFAULT_COLOR, PLACES, placesIn, readingLines, type PlaceTag } from '../game/prompting'
 import type {
   BreakRow,
   BuildRow,
@@ -75,7 +78,7 @@ import type {
   TaskRow,
   VoteRow,
 } from '../game/types'
-import { describeItems, fillGaps, quickWreck, runBuilderAgent, runWreckAgent, type TaskNeed, type WreckKind, type WreckTarget } from '../server/builder-agent'
+import { describeItems, quickWreck, runBuilderAgent, runWreckAgent, type BuildOp, type WreckKind, type WreckTarget } from '../server/builder-agent'
 import { planMeeting, planVotes, replyInMeeting, type MeetingInput } from '../server/meeting-ai'
 
 type Ctx = Parameters<ActionHandler<Env>>[0]
@@ -253,6 +256,7 @@ async function placeItems(
   items: { type: BuildType; color: ColorName | null }[],
   orderId: string,
   rng: Rng,
+  places: PlaceTag[] = [],
 ): Promise<number> {
   for (const it of items) await clearBroken(tools, game.id, player.id, landmark.id, it.type)
   const all = await loadBuilds(tools, game.id)
@@ -262,10 +266,11 @@ async function placeItems(
   const at = Date.now()
   for (const it of items) {
     if (all.length + n >= MAX_BUILDS_PER_GAME) break
-    const spot = spotAtLandmark(landmark, it.type, here, rng)
+    const spot = spotAtLandmark(landmark, it.type, here, rng, places)
     const row: BuildRow = {
       gameId: game.id, orderId, playerId: player.id, landmarkId: landmark.id, type: it.type, x: spot.x, z: spot.z, lift: spot.lift,
       rot: spot.rot, scale: 1, color: it.color ? COLORS[it.color] : '', colorName: it.color ?? '', state: 'ok', seq: seq++, at,
+      placeTag: spot.place ?? '',
     }
     await create<BuildRow>(tools, 'builds', row)
     here.push(row)
@@ -294,7 +299,7 @@ async function wreckTargets(tools: ActionTools, gameId: string, landmarkId: stri
       b.data.state === 'ok' &&
       tasks.some((t) => {
         const tpl = taskTemplate(t.data.templateId)
-        return tpl && t.data.playerId === b.data.playerId && tpl.need.type === b.data.type && (!tpl.need.color || tpl.need.color === b.data.colorName)
+        return tpl && t.data.playerId === b.data.playerId && tpl.need.type === b.data.type && (!tpl.need.color || tpl.need.color === b.data.colorName) && (!tpl.need.place || tpl.need.place === b.data.placeTag)
       }),
   )
   hits.sort((a, b) => b.data.at - a.data.at)
@@ -314,14 +319,21 @@ async function applyWreck(
 ) {
   const now = Date.now()
   const spots: Pos[] = []
+  const hit = new Set<string>()
   for (const a of acts) {
     const i = targets.findIndex((t) => t.id === a.targetId)
-    const row = rows[i]
-    if (!row) continue
-    spots.push({ x: row.data.x, z: row.data.z })
-    if (a.kind === 'remove') await must(tools.remove('builds', row.id))
-    else if (a.kind === 'knock') await must(tools.update('builds', row.id, { state: 'knocked' }))
-    else await must(tools.update('builds', row.id, { state: 'painted', colorName: a.color, color: COLORS[a.color] }))
+    const first = rows[i]
+    if (!first) continue
+    spots.push({ x: first.data.x, z: first.data.z })
+    // A wreck hits the whole task: both tents, all three lanterns. Redoing the
+    // original prompt then restores it exactly, with no leftover to miscount.
+    const group = rows.filter((r) => r.data.playerId === first.data.playerId && r.data.type === first.data.type && !hit.has(r.id))
+    for (const row of group) {
+      hit.add(row.id)
+      if (a.kind === 'remove') await must(tools.remove('builds', row.id))
+      else if (a.kind === 'knock') await must(tools.update('builds', row.id, { state: 'knocked' }))
+      else await must(tools.update('builds', row.id, { state: 'painted', colorName: a.color, color: COLORS[a.color] }))
+    }
   }
   const res = await refreshTasks(tools, game, landmark.id)
   if (res.broken.length) {
@@ -411,8 +423,11 @@ async function runBots(env: Env, tools: ActionTools, game: Row<GameRow>, now: nu
       const tpl = taskTemplate(last.ref.slice(5))
       const lm = tpl ? landmarkById(tpl.landmarkId) : null
       if (tpl && lm && dist(here, lm) <= TASK_RANGE + 0.5) {
-        const want = Math.max(1, tpl.need.count ?? 1)
-        await placeItems(tools, game, bot, lm, Array.from({ length: want }, () => ({ type: tpl.need.type, color: tpl.need.color ?? null })), '', rng)
+        // Only what is missing, so a count task ends on the exact number.
+        const mine = (await loadBuilds(tools, game.id, lm.id)).map((b) => b.data).filter((b) => b.playerId === bot.id)
+        const have = mine.filter((b) => b.type === tpl.need.type && b.state === 'ok' && (!tpl.need.color || b.colorName === tpl.need.color) && (!tpl.need.place || b.placeTag === tpl.need.place)).length
+        const want = Math.max(1, (tpl.need.count ?? 1) - have)
+        await placeItems(tools, game, bot, lm, Array.from({ length: want }, () => ({ type: tpl.need.type, color: tpl.need.color ?? null })), '', rng, tpl.need.place ? [tpl.need.place] : [])
         const res = await refreshTasks(tools, game, lm.id)
         await settleBreaks(tools, game.id, lm.id)
         tasks = null
@@ -632,6 +647,13 @@ async function resolveVote(tools: ActionTools, game: Row<GameRow>) {
 
 /** Decide the winner from the current state, and end the game if there is one. */
 async function finishIfOver(tools: ActionTools, game: Row<GameRow>, nightFallen = false): Promise<boolean> {
+  if (game.data.mode === 'practice') {
+    const tasks = await loadTasks(tools, game.id)
+    if (!tasks.length || tasks.some((t) => t.data.status !== 'done')) return false
+    await patchGame(tools, game.id, { phase: 'over', phaseEndsAt: 0, winner: 'crew', winReason: 'You finished every practice task.', reveal: { impostorPlayerId: '', wrecks: 0 } })
+    game.data.phase = 'over'
+    return true
+  }
   const players = await loadPlayers(tools, game.id)
   const secrets = await loadSecrets(tools, game.id)
   const tasks = await loadTasks(tools, game.id)
@@ -722,6 +744,36 @@ async function createGame({ userId, tools }: Ctx): Promise<ActionResult> {
   return ok({ gameId, code })
 }
 
+/**
+ * Practice: a solo round with only the builder. You get PRACTICE_TASKS tasks at
+ * different landmarks, and the game ends when they are all done. There is no
+ * Impostor, no AI players, no meetings and no night clock.
+ */
+async function startPractice(ctx: Ctx): Promise<ActionResult> {
+  const { userId, tools } = ctx
+  const created = await createGame(ctx)
+  if (!created.success) return created
+  const { gameId, code } = created.data as { gameId: string; code: string }
+  const game = await loadGame(tools, gameId)
+  const me = (await loadPlayers(tools, gameId))[0]
+  if (!game || !me) return fail('Could not start practice. Try again.')
+  await create<SecretRow>(tools, 'secrets', {
+    gameId, playerId: me.id, ownerUserId: userId, role: 'crew', fakeTasks: [], wreckReadyAt: 0, lightsReadyAt: 0, lightsUsed: 0, pending: null,
+  })
+  const rng = makeRng(game.data.seed ^ 0x9a7)
+  const deal = dealTasks([me.id], rng, PRACTICE_TASKS)
+  for (const templateId of deal[me.id] ?? []) {
+    await create<TaskRow>(tools, 'tasks', {
+      gameId, playerId: me.id, ownerUserId: userId, templateId, landmarkId: taskTemplate(templateId)?.landmarkId ?? '', status: 'todo', doneAt: 0, tries: 0, firstTry: 0,
+    })
+  }
+  await patchGame(tools, gameId, {
+    mode: 'practice', phase: 'play', phaseEndsAt: 0, nightAt: 0, tasksDone: 0, tasksTotal: (deal[me.id] ?? []).length, timeOfDay: 'day', bellLockUntil: 0,
+  })
+  await event(tools, gameId, 'system', 'Practice: walk to each task and write your own prompt. Anything you leave out, the builder fills in its own way.')
+  return ok({ gameId, code })
+}
+
 async function findGameByCode(tools: ActionTools, codeRaw: unknown): Promise<Row<GameRow> | null> {
   const code = normalizeCode(codeRaw)
   if (code.length !== 4) return null
@@ -805,6 +857,8 @@ async function tick({ env, params, tools }: Ctx): Promise<ActionResult> {
   if (!game) return fail('Game not found.')
   const t = Date.now()
   const phase: Phase = game.data.phase
+  // Practice has no night clock, AI players or meetings: nothing to run.
+  if (game.data.mode === 'practice') return ok({ phase, now: t })
   if (phase === 'intro' && t >= game.data.phaseEndsAt) {
     await patchGame(tools, game.id, { phase: 'play', phaseEndsAt: 0, nightAt: t + PLAY_MS, timeOfDay: 'day', bellLockUntil: t + 10_000 })
     await event(tools, game.id, 'system', 'Fix up the island before night falls.')
@@ -882,9 +936,22 @@ function pendingOf(secret: Row<SecretRow> | undefined, kind: PendingJob['kind'],
   return job
 }
 
+/** What the player's builds at a landmark look like, for the builder's context. */
+const label = (b: BuildRow) => `${b.colorName ? `${b.colorName} ` : ''}${b.type.replace('_', ' ')}${b.placeTag ? ` ${PLACES[b.placeTag as PlaceTag]?.label ?? ''}` : ''}`
+
+/** The player's own intact builds an edit applies to: of one type, or from their latest prompt here. */
+function editTargets(mine: Row<BuildRow>[], type: string | null): Row<BuildRow>[] {
+  const ok = mine.filter((b) => b.data.state === 'ok')
+  if (type) return ok.filter((b) => b.data.type === type).sort((a, b) => b.data.seq - a.data.seq)
+  const last = ok.reduce((m, b) => (b.data.seq > m ? b.data.seq : m), -1)
+  const order = ok.find((b) => b.data.seq === last)?.data.orderId
+  return ok.filter((b) => b.data.orderId === order).sort((a, b) => b.data.seq - a.data.seq)
+}
+
 /**
- * Start a build: the builder reads the prompt now, and the objects appear when
- * the player has stood at the landmark for BUILD_MS (see finishBuild).
+ * Start a build: the builder reads the prompt now, and the result lands when
+ * the player has stood at the landmark long enough (see finishBuild). New
+ * objects take BUILD_MS; changes to things already built take EDIT_MS.
  */
 async function buildOrder(ctx: Ctx): Promise<ActionResult> {
   const { env, params, tools } = ctx
@@ -902,22 +969,52 @@ async function buildOrder(ctx: Ctx): Promise<ActionResult> {
   await must(tools.update('players', me.id, { lastOrderAt: now }))
 
   const builds = await loadBuilds(tools, game.id)
-  const here = builds
-    .filter((b) => b.data.landmarkId === landmark.id && b.data.state === 'ok')
-    .map((b) => `${b.data.colorName ? `${b.data.colorName} ` : ''}${b.data.type.replace('_', ' ')}`)
-  const plan = await runBuilderAgent(env, { text, landmarkName: landmark.name, here, capacity: MAX_BUILDS_PER_GAME - builds.length })
-  if (!plan.items.length) return ok({ narration: plan.narration, placed: 0, completed: [] })
-  // Vague prompts: the builder makes up the details the player left out.
-  const mine = (await loadTasks(tools, game.id)).filter((t) => t.data.playerId === me.id && t.data.landmarkId === landmark.id && t.data.status !== 'done')
-  const needs = mine.map((t) => taskTemplate(t.data.templateId)?.need).filter((x): x is TaskNeed => Boolean(x))
-  const filled = fillGaps(plan.items, needs, text, makeRng(hashString(`${me.id}:${now}:gaps`)))
+  const hereRows = builds.filter((b) => b.data.landmarkId === landmark.id && b.data.state === 'ok')
+  const plan = await runBuilderAgent(env, {
+    text, landmarkName: landmark.name, capacity: MAX_BUILDS_PER_GAME - builds.length,
+    here: hereRows.map((b) => label(b.data)),
+    mine: hereRows.filter((b) => b.data.playerId === me.id).map((b) => label(b.data)),
+  })
+  if (!plan.ops.length) return ok({ narration: plan.narration, placed: 0, completed: [], reading: [plan.narration] })
+
+  // How each part of the prompt was read: what it said, and what the builder filled in.
+  const places = placesIn(text)
+  const anchors = placeAnchors(landmark)
+  const mine = hereRows.filter((b) => b.data.playerId === me.id)
+  const reading: string[] = []
+  const changed: string[] = []
+  for (const op of plan.ops) {
+    if (op.op === 'add') {
+      const at = places.map((tag) => anchors.find((a) => a.tag === tag && a.type === op.type) ?? anchors.find((a) => a.tag === tag)).find(Boolean)
+      // The builder never sees the hidden task, so a color it read ("lemon colored" as yellow) is the player's own.
+      const color = op.color ?? DEFAULT_COLOR[op.type] ?? null
+      reading.push(...readingLines({ type: op.type, count: op.count, color, colorSaid: Boolean(op.color), place: at?.tag ?? null, placeSaid: places.length > 0, landmarkName: landmark.name }))
+    } else {
+      const targets = editTargets(mine, op.type)
+      // "your bench", "your 2 fences"
+      const what = `your ${describeItems(targets.map((b) => ({ type: b.data.type as BuildType, color: null }))).replace(/^Built (an? )?/, '').replace(/\.$/, '')}`
+      if (!targets.length) reading.push(`I read: change ${op.type ? `your ${op.type.replace('_', ' ')}` : 'what you built'}, but you have nothing like that here.`)
+      else if (op.op === 'recolor') {
+        reading.push(`I read: make ${what} ${op.color}.`)
+        changed.push(`Made ${what} ${op.color}.`)
+      } else if (op.op === 'move') {
+        const at = places.map((tag) => anchors.find((a) => a.tag === tag)).find(Boolean)
+        reading.push(at ? `I read: put ${what} ${PLACES[at.tag].label}.` : places.length ? `I read: move ${what}, but there is no spot like that here.` : `I read: move ${what}, but you didn't say where.`)
+        if (at) changed.push(`Put ${what} ${PLACES[at.tag].label}.`)
+      } else {
+        const n = Math.min(op.count, targets.length)
+        reading.push(n === targets.length ? `I read: take away ${what}.` : `I read: take away ${n} of ${what}.`)
+        changed.push(n === targets.length ? `Took away ${what}.` : `Took away ${n} of ${what}.`)
+      }
+    }
+  }
+  const adds = plan.ops.some((o) => o.op === 'add')
   const job: PendingJob = {
-    kind: 'build', landmarkId: landmark.id, startedAt: now, readyAt: now + BUILD_MS,
-    narration: filled.guessed.length ? describeItems(filled.items) : plan.narration || describeItems(filled.items),
-    items: filled.items, guessed: filled.guessed,
+    kind: 'build', landmarkId: landmark.id, startedAt: now, readyAt: now + (adds ? BUILD_MS : EDIT_MS),
+    narration: adds ? plan.narration : changed.join(' ') || 'Nothing changed.', ops: plan.ops, places, reading,
   }
   await must(tools.update('secrets', secret.id, { pending: job }))
-  return ok({ pending: true, readyIn: Math.max(0, job.readyAt - Date.now()), narration: job.narration, usedModel: plan.usedModel })
+  return ok({ pending: true, readyIn: Math.max(0, job.readyAt - Date.now()), ms: job.readyAt - now, narration: job.narration, reading, usedModel: plan.usedModel })
 }
 
 /** Finish a started build if the player stayed at the landmark long enough. */
@@ -934,14 +1031,36 @@ async function finishBuild(ctx: Ctx): Promise<ActionResult> {
   await must(tools.update('secrets', secret.id, { pending: null }))
   if (dist(pos, landmark) > TASK_RANGE + 0.4) return fail(`You walked away from the ${landmark.name}, so the build stopped.`, 'too_far')
 
-  const items = (job.items ?? []).filter((it) => isBuildType(it.type)).map((it) => ({ type: it.type as BuildType, color: normalizeColor(it.color) }))
+  const places = (job.places ?? []).filter((p): p is PlaceTag => p in PLACES)
+  const rng = makeRng(hashString(`${me.id}:${job.startedAt}`))
   const before = (await loadTasks(tools, game.id)).filter((t) => t.data.playerId === me.id && t.data.landmarkId === landmark.id)
   const open = before.filter((t) => t.data.status !== 'done')
   for (const t of open) {
     t.data.tries = (t.data.tries ?? 0) + 1
     await must(tools.update('tasks', t.id, { tries: t.data.tries }))
   }
-  const placed = await placeItems(tools, game, me, landmark, items, `o${job.startedAt}`, makeRng(hashString(`${me.id}:${job.startedAt}`)))
+  let placed = 0
+  for (const op of (job.ops ?? []) as BuildOp[]) {
+    const mine = (await loadBuilds(tools, game.id, landmark.id)).filter((b) => b.data.playerId === me.id)
+    if (op.op === 'add') {
+      if (!isBuildType(op.type)) continue
+      // A color the prompt did not give becomes the builder's own default.
+      const color = (op.color ? normalizeColor(op.color) : null) ?? DEFAULT_COLOR[op.type] ?? null
+      placed += await placeItems(tools, game, me, landmark, Array.from({ length: op.count }, () => ({ type: op.type, color })), `o${job.startedAt}`, rng, places)
+    } else if (op.op === 'recolor') {
+      const color = normalizeColor(op.color)
+      if (!color) continue
+      for (const b of editTargets(mine, op.type)) await must(tools.update('builds', b.id, { color: COLORS[color], colorName: color }))
+    } else if (op.op === 'move') {
+      const targets = editTargets(mine, op.type)
+      if (!places.length || !targets.length) continue
+      // Moving re-places each object at the asked spot.
+      for (const b of targets) await must(tools.remove('builds', b.id))
+      placed += await placeItems(tools, game, me, landmark, targets.map((b) => ({ type: b.data.type as BuildType, color: normalizeColor(b.data.colorName) })), `o${job.startedAt}`, rng, places)
+    } else if (op.op === 'remove') {
+      for (const b of editTargets(mine, op.type).slice(0, op.count)) await must(tools.remove('builds', b.id))
+    }
+  }
   const res = await refreshTasks(tools, game, landmark.id)
   await settleBreaks(tools, game.id, landmark.id)
   const completed: string[] = []
@@ -951,18 +1070,18 @@ async function finishBuild(ctx: Ctx): Promise<ActionResult> {
     const was = before.find((b) => b.id === t.id)
     if (was && !was.data.doneAt && (was.data.tries ?? 0) <= 1) await must(tools.update('tasks', t.id, { firstTry: 1 }))
   }
-  // Why the order missed, for each of this player's tasks here that is still open.
+  // Why the prompt missed: which part first, the exact ask after a second miss.
   const builds = (await loadBuilds(tools, game.id, landmark.id)).map((b) => b.data).filter((b) => b.playerId === me.id)
   const feedback: string[] = []
   for (const t of open) {
     if (completed.includes(t.data.templateId)) continue
     const tpl = taskTemplate(t.data.templateId)
     if (!tpl) continue
-    const line = explainMiss(tpl, builds, job.guessed?.find((g) => g.type === tpl.need.type))
+    const line = explainMiss(tpl, builds, (t.data.tries ?? 0) >= 2)
     if (line) feedback.push(line)
   }
   if (res.total && res.count >= res.total) await finishIfOver(tools, game)
-  return ok({ narration: job.narration, placed, completed, feedback })
+  return ok({ narration: job.narration, placed, completed, feedback, reading: job.reading ?? [] })
 }
 
 /** Start a wreck: it lands after WRECK_MS standing at the landmark (see finishWreck). */
@@ -1057,6 +1176,7 @@ async function ringBell(ctx: Ctx): Promise<ActionResult> {
   const m = await playMove(ctx, { living: true })
   if ('error' in m) return m.error as ActionResult
   const { game, me, pos, now } = m
+  if (game.data.mode === 'practice') return fail('There are no meetings in practice.')
   if (dist(pos, MEETING_SPOT) > BELL_RANGE) return fail('Walk to the bell in the middle of the island.', 'too_far')
   if ((me.data.bellsLeft ?? 0) <= 0) return fail('You already rang the bell this game.')
   if (game.data.bellLockUntil > now) return fail('The bell was just rung. Wait a few seconds.')
@@ -1241,6 +1361,7 @@ export const gameActions: Record<string, ActionHandler<Env>> = {
   'game-chat': guard(sendChat),
   'game-vote': guard(castVote),
   'game-rematch': guard(rematch),
+  'game-practice': guard(startPractice),
   'game-leave': guard(leaveGame),
   'game-end': guard(endGame),
 }

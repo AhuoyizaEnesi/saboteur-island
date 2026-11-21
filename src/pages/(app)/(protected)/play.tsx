@@ -11,7 +11,7 @@ import '../../../game/game.css'
 export default function PlayPage() {
   const navigate = useNavigate()
   const [code, setCode] = useState('')
-  const [busy, setBusy] = useState<'create' | 'join' | null>(null)
+  const [busy, setBusy] = useState<'create' | 'join' | 'practice' | null>(null)
   const [error, setError] = useState('')
 
   const create = async () => {
@@ -22,6 +22,17 @@ export default function PlayPage() {
       navigate(`/g/${r.code}`)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create a game.')
+      setBusy(null)
+    }
+  }
+  const practice = async () => {
+    setBusy('practice')
+    setError('')
+    try {
+      const r = await callAction<{ code: string }>('game-practice')
+      navigate(`/g/${r.code}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not start practice.')
       setBusy(null)
     }
   }
@@ -77,6 +88,11 @@ export default function PlayPage() {
             {busy === 'create' ? 'Raising the island...' : 'Create a game'}
           </button>
           <p className="si-small">AI players fill any empty seats, so you can play alone.</p>
+          <div className="si-eyebrow">Practice your prompts</div>
+          <button className="si-btn wide" disabled={busy !== null} onClick={practice}>
+            {busy === 'practice' ? 'Setting up...' : 'Practice with the builder'}
+          </button>
+          <p className="si-small">Just you and the builder: 4 tasks, no Impostor, no meetings, no clock.</p>
           <div className="si-eyebrow">Join with a code</div>
           <form
             onSubmit={(e) => {

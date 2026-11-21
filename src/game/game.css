@@ -351,3 +351,14 @@
 .si-gamemenu { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 290px; }
 .si-gamemenu .si-btn { width: 100%; justify-content: center; }
 .si a.si-btn, .si-menu a.si-btn { text-decoration: none; }
+.si-practice-timer { font-size: 22px; }
+
+/* Requests and the "I read" card */
+.si-task .si-req { font-size: 12px; color: #e9e5ff; line-height: 1.35; }
+.si-taskhere .si-req { font-size: 12.5px; color: #fff6dc; line-height: 1.4; }
+.si-job > div > span { display: block; line-height: 1.4; }
+.si-result i { font-style: normal; font-size: 12px; color: #e6fdff; line-height: 1.4; }
+.si-result small { font-size: 11px; color: var(--muted); margin-top: 2px; }
+@media (max-width: 720px) {
+  .si-task .si-req { font-size: 11px; }
+}

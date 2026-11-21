@@ -19,7 +19,7 @@ import { generateText, stepCountIs, tool } from 'ai'
 import { z } from 'zod/v4'
 import { createDeepSpaceAI } from 'deepspace/worker'
 import { BUILD_TYPES, CATALOG, COLOR_NAMES, normalizeBuildType, normalizeColor, pluralLabel, type BuildType, type ColorName } from '../game/catalog'
-import { GUESS_RATE, MAX_ITEMS_PER_ORDER } from '../game/constants'
+import { MAX_ITEMS_PER_ORDER } from '../game/constants'
 import type { Env } from '../../worker'
 
 export const AGENT_MODEL = 'claude-haiku-5-5'
@@ -29,11 +29,23 @@ export interface BuildItem {
   color: ColorName | null
 }
 
+/** One thing a prompt asks for: new objects, or a change to the player's own builds here. */
+export type BuildOp =
+  | { op: 'add'; type: BuildType; color: ColorName | null; count: number }
+  | { op: 'recolor'; type: BuildType | null; color: ColorName }
+  | { op: 'move'; type: BuildType | null }
+  | { op: 'remove'; type: BuildType | null; count: number }
+
 export interface BuildPlan {
+  /** New objects only, for callers that just place things. */
   items: BuildItem[]
+  ops: BuildOp[]
   narration: string
   usedModel: boolean
 }
+
+const addsOf = (ops: BuildOp[]): BuildItem[] =>
+  ops.flatMap((o) => (o.op === 'add' ? Array.from({ length: o.count }, () => ({ type: o.type, color: o.color })) : []))
 
 export interface WreckTarget {
   id: string
@@ -100,9 +112,10 @@ export function describeItems(items: BuildItem[]): string {
 
 export async function runBuilderAgent(
   env: Env,
-  input: { text: string; landmarkName: string; here: string[]; capacity: number },
+  input: { text: string; landmarkName: string; here: string[]; capacity: number; mine?: string[] },
 ): Promise<BuildPlan> {
   const list = new ItemList(input.capacity)
+  const edits: BuildOp[] = []
   try {
     const anthropic = createDeepSpaceAI(env, 'anthropic')
     const result = await generateText({
@@ -110,22 +123,22 @@ export async function runBuilderAgent(
       stopWhen: stepCountIs(4),
       system: [
         'You are the builder in Saboteur Island, a party game on a small floating island.',
-        'A player stands at one landmark and gives you a short order. You build it only by calling place_object.',
-        'Everything you place goes at that landmark; the server picks the exact spot.',
-        'Follow the order literally. Never judge, refuse, add extras or question the player.',
-        'If something is not in the catalog, use the closest catalog item. Only use colors from the color list.',
-        `Place at most ${MAX_ITEMS_PER_ORDER} objects. If the order says how many, place exactly that many. If it does not, place one.`,
-        'Only give a color when the order names one.',
-        'When done, reply with one plain sentence under 14 words saying what you built. No emojis, no dashes.',
+        'A player stands at one landmark and gives you a short order. You act only by calling tools.',
+        'Use place_object for new things. When the order is about things the player already built here (it, them, the bird), use recolor, move or remove instead.',
+        'Everything goes at that landmark; the server picks exact spots from the place words in the order.',
+        'Follow the order literally. Never judge, refuse, add extras or question the player. Never guess what they meant.',
+        'If something is not in the catalog, use the closest catalog item. Only use colors from the color list, and only when the order names one.',
+        `Place at most ${MAX_ITEMS_PER_ORDER} objects. If the order says how many, use exactly that. If not, use 1 for a singular word and 3 for a plural word like "ducks".`,
+        'When done, reply with one plain sentence under 14 words saying what you did. No emojis, no dashes.',
         '',
         `Colors: ${COLOR_NAMES.join(', ')}`,
         'Catalog:',
         catalogLines(),
       ].join('\n'),
-      prompt: `Landmark: ${input.landmarkName}. Already here: ${input.here.length ? input.here.join(', ') : 'nothing yet'}.\nOrder: "${input.text}"`,
+      prompt: `Landmark: ${input.landmarkName}. Already here: ${input.here.length ? input.here.join(', ') : 'nothing yet'}. Built by this player here: ${input.mine?.length ? input.mine.join(', ') : 'nothing yet'}.\nOrder: "${input.text}"`,
       tools: {
         place_object: tool({
-          description: 'Place one or more objects of one catalog type at this landmark, optionally in one color.',
+          description: 'Place one or more new objects of one catalog type at this landmark, optionally in one color.',
           inputSchema: z.object({
             type: z.enum(BUILD_TYPES as [BuildType, ...BuildType[]]),
             color: z.enum(COLOR_NAMES as [ColorName, ...ColorName[]]).optional(),
@@ -136,15 +149,52 @@ export async function runBuilderAgent(
             return { placed, roomLeft: list.room }
           },
         }),
+        recolor: tool({
+          description: "Change the color of the player's own objects here. Leave type out to mean the things they just built.",
+          inputSchema: z.object({ type: z.enum(BUILD_TYPES as [BuildType, ...BuildType[]]).optional(), color: z.enum(COLOR_NAMES as [ColorName, ...ColorName[]]) }),
+          execute: async ({ type, color }) => {
+            edits.push({ op: 'recolor', type: type ?? null, color })
+            return { ok: true }
+          },
+        }),
+        move: tool({
+          description: "Move the player's own objects here to the place named in the order. Leave type out to mean the things they just built.",
+          inputSchema: z.object({ type: z.enum(BUILD_TYPES as [BuildType, ...BuildType[]]).optional() }),
+          execute: async ({ type }) => {
+            edits.push({ op: 'move', type: type ?? null })
+            return { ok: true }
+          },
+        }),
+        remove: tool({
+          description: "Take away some of the player's own objects here, newest first.",
+          inputSchema: z.object({ type: z.enum(BUILD_TYPES as [BuildType, ...BuildType[]]).optional(), count: z.number().int().min(1).max(10).optional() }),
+          execute: async ({ type, count }) => {
+            edits.push({ op: 'remove', type: type ?? null, count: count ?? 1 })
+            return { ok: true }
+          },
+        }),
       },
     })
-    if (!list.items.length) return keywordBuild(input)
-    return { items: list.items, narration: lastLine(result.text) || describeItems(list.items), usedModel: true }
+    const ops = [...edits, ...groupAdds(list.items)]
+    if (!ops.length) return keywordBuild(input)
+    return { items: list.items, ops, narration: lastLine(result.text) || describeItems(list.items), usedModel: true }
   } catch (err) {
     console.warn('[builder] model unavailable, using keyword builder:', err instanceof Error ? err.message : err)
-    if (list.items.length) return { items: list.items, narration: describeItems(list.items), usedModel: true }
+    const ops = [...edits, ...groupAdds(list.items)]
+    if (ops.length) return { items: list.items, ops, narration: describeItems(list.items), usedModel: true }
     return keywordBuild(input)
   }
+}
+
+/** Adds of the same type and color in one op. */
+function groupAdds(items: BuildItem[]): BuildOp[] {
+  const out: (BuildOp & { op: 'add' })[] = []
+  for (const it of items) {
+    const g = out.find((o) => o.type === it.type && o.color === it.color)
+    if (g) g.count++
+    else out.push({ op: 'add', type: it.type, color: it.color, count: 1 })
+  }
+  return out
 }
 
 const NUMS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, couple: 2, few: 3, some: 2, pair: 2 }
@@ -157,10 +207,14 @@ const MULTI: [RegExp, BuildType][] = [
   [/\bcamp ?fire|bon ?fire\b/, 'campfire'],
 ]
 
-/** Offline fallback: understands counts, colors and object words. */
+const PLURAL = (w: string, t: BuildType) => /s$/.test(w) && w !== t && !['grass', 'moss'].includes(w)
+
+/** Offline fallback: understands counts, colors, object words, and simple edits like "make it yellow". */
 export function keywordBuild(input: { text: string; capacity: number }): BuildPlan {
   const list = new ItemList(input.capacity)
   const s = input.text.toLowerCase()
+  const edit = keywordEdit(s)
+  if (edit) return { items: [], ops: [edit], narration: 'Done.', usedModel: false }
   const words = s.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean)
   const seen = new Set<BuildType>()
   const found: { type: BuildType; at: number }[] = []
@@ -180,7 +234,7 @@ export function keywordBuild(input: { text: string; capacity: number }): BuildPl
   })
   found.sort((a, b) => a.at - b.at)
   for (const f of found) {
-    let n = 1
+    let n = PLURAL(words[f.at] ?? '', f.type) ? 3 : 1
     let color: ColorName | null = null
     for (let b = 1; b <= 3; b++) {
       const w = words[f.at - b]
@@ -193,69 +247,23 @@ export function keywordBuild(input: { text: string; capacity: number }): BuildPl
     list.add(f.type, color, n)
     if (!list.room) break
   }
-  return { items: list.items, narration: describeItems(list.items), usedModel: false }
+  return { items: list.items, ops: groupAdds(list.items), narration: describeItems(list.items), usedModel: false }
 }
 
-// ─── vague prompts ───────────────────────────────────────────────────────────
-
-const COUNT_WORDS = /\b(\d+|a|an|one|two|three|four|single|pair|couple|both)\b/
-const VAGUE_WORDS = /\b(some|few|several|many|lots|bunch|multiple)\b/
-
-/** Did the prompt name a color? */
-export function saidColor(text: string): boolean {
-  return text.toLowerCase().split(/[^a-z]+/).some((w) => normalizeColor(w) !== null)
-}
-
-/** Did the prompt say how many? "some ducks" and "a few" do not count. */
-export function saidCount(text: string): boolean {
-  const s = text.toLowerCase()
-  return COUNT_WORDS.test(s) && !VAGUE_WORDS.test(s)
-}
-
-export interface TaskNeed {
-  type: BuildType
-  color?: ColorName
-  count?: number
-}
-
-export interface Guess {
-  type: BuildType
-  color?: ColorName
-  count?: number
-}
-
-/**
- * When a prompt leaves out a detail one of the player's tasks here needs, the
- * builder fills the gap itself, like a model making something up. The guess
- * matches the task GUESS_RATE of the time. Specific prompts are left alone.
- */
-export function fillGaps(items: BuildItem[], needs: TaskNeed[], text: string, rng: () => number): { items: BuildItem[]; guessed: Guess[] } {
-  const colorSaid = saidColor(text)
-  const countSaid = saidCount(text)
-  let out = items.slice()
-  const guessed: Guess[] = []
-  for (const need of needs) {
-    const mine = out.filter((it) => it.type === need.type)
-    if (!mine.length) continue
-    const g: Guess = { type: need.type }
-    let color = mine[0].color
-    if (need.color && !colorSaid) {
-      const others = COLOR_NAMES.filter((c) => c !== need.color)
-      color = rng() < GUESS_RATE ? need.color : others[Math.floor(rng() * others.length)]
-      g.color = color
-    }
-    let n = mine.length
-    const want = need.count ?? 1
-    if (want > 1 && !countSaid) {
-      const others = [1, 2, 3, 4].filter((k) => k !== want)
-      n = rng() < GUESS_RATE ? want : others[Math.floor(rng() * others.length)]
-      g.count = n
-    }
-    if (g.color === undefined && g.count === undefined) continue
-    out = [...out.filter((it) => it.type !== need.type), ...Array.from({ length: n }, () => ({ type: need.type, color }))]
-    guessed.push(g)
+/** "make it yellow", "move them to the pond", "remove one duck": changes to what the player built. */
+function keywordEdit(s: string): BuildOp | null {
+  const words = s.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean)
+  const type = words.map((w) => WORD_TO_TYPE[w]).find(Boolean) ?? null
+  const color = words.map((w) => normalizeColor(w)).find(Boolean) ?? null
+  const fresh = /\b(add|another|more|new|build|plant|make (a|an|\d|two|three|some))\b/.test(s)
+  if (/\b(remove|delete|take away|get rid of|take off|destroy)\b/.test(s)) {
+    const nw = words.find((w) => /^\d+$/.test(w) || NUMS[w] !== undefined)
+    const n = nw ? (/^\d+$/.test(nw) ? parseInt(nw, 10) : NUMS[nw]) : /\ball\b/.test(s) ? 10 : 1
+    return { op: 'remove', type, count: n }
   }
-  return { items: out.slice(0, MAX_ITEMS_PER_ORDER), guessed }
+  if (color && !fresh && /\b(make|paint|turn|change|recolou?r|colou?r)\b/.test(s)) return { op: 'recolor', type, color }
+  if (!fresh && /\b(move|shift|carry|put (it|them|those|that)|place (it|them))\b/.test(s)) return { op: 'move', type }
+  return null
 }
 
 // ─── wreck mode ──────────────────────────────────────────────────────────────
@@ -333,4 +341,4 @@ export function keywordWreck(text: string, targets: WreckTarget[]): WreckPlan {
   return { acts, narration: describeWreck(acts, targets), usedModel: false }
 }
 
-export const __test = { keywordBuild, keywordWreck, describeItems, normalizeBuildType }
+export const __test = { keywordBuild, keywordEdit, keywordWreck, describeItems, normalizeBuildType }

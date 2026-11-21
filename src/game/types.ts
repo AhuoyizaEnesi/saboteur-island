@@ -28,6 +28,8 @@ export interface GameRow {
   ejectedId: string
   ejectedWasImpostor: number
   winner: '' | 'crew' | 'impostor'
+  /** 'practice' is a solo game with only the builder: no Impostor, no meetings, no night clock. */
+  mode?: '' | 'party' | 'practice'
   winReason: string
   reveal: Reveal | null
   /** AI votes for the current meeting. Firm votes (eyewitnesses) never change. */
@@ -83,10 +85,12 @@ export interface PendingJob {
   startedAt: number
   readyAt: number
   narration: string
-  /** Builds: what to place. */
-  items?: { type: string; color: string | null }[]
-  /** Builds: details the builder had to guess, to explain a miss. */
-  guessed?: { color?: string; count?: number; type?: string }[]
+  /** Builds: what the prompt asked for, new objects or changes to the player's own. */
+  ops?: ({ op: 'add'; type: string; color: string | null; count: number } | { op: 'recolor'; type: string | null; color: string } | { op: 'move'; type: string | null } | { op: 'remove'; type: string | null; count: number })[]
+  /** Builds: place words the prompt used, in order. */
+  places?: string[]
+  /** Builds: the "I read" card, shown while building and after. */
+  reading?: string[]
   /** Wrecks: what to do to which target. */
   acts?: { targetId: string; kind: string; color: string }[]
 }
@@ -126,6 +130,8 @@ export interface BuildRow {
   state: BuildState
   seq: number
   at: number
+  /** The place word spot it stands at ("roof"), or empty. */
+  placeTag?: string
 }
 
 export interface BreakRow {

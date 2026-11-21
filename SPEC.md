@@ -37,18 +37,29 @@ The Impostor gets a fake task list so they know where to pretend to work. Nothin
 
 The island is about twice its current size, so walking takes real time and players can be out of sight. Landmarks are placed at game start and never move.
 
-Every task names the place, the object, at least one detail (a color or a count) and a short reason.
+Every task is a request from someone who lives there, in their own words. The request hints at the details instead of naming them ("the color of a lemon"), so the player has to turn it into a clear prompt. Each task has a hidden checklist the server checks.
 
-| Landmark | Tasks there |
+| Landmark | Who asks | Request | Checklist |
+|---|---|---|---|
+| Red Cottage | Mira | I miss the birds since winter. Put one up high where I can see it from my window, in the color of a lemon. | a yellow bird on the roof |
+| Red Cottage | Mira | Guests keep tripping on my step at night. I need a lantern on each side of my door. | 2 lanterns by the door |
+| Blue Cottage | Tomas | My front yard looks bare. I want three flower beds out front, the color of bubblegum. | 3 pink flower beds out front |
+| Blue Cottage | Tomas | My garden needs a border. Build me a fence the color of fresh snow. | a white fence |
+| Dock and Pond | The fisher | I need a ride across the pond. Tie a boat to the dock, the color of a ripe tomato so I can spot it. | a red boat at the dock |
+| Dock and Pond | The fisher | My two kids want company out on the water. One duck each, please. | 2 ducks in the pond |
+| Well | Old Wen | Something odd grows in the shade here. Grow me three mushrooms the color of a grape. | 3 purple mushrooms |
+| Well | Old Wen | My knees ache after hauling water. I need a bench to rest on, the color of fresh grass. | a green bench |
+| Windmill | The miller | I want a small flock grazing here. Just a pair to start. | 2 sheep |
+| Windmill | The miller | Crows keep stealing my grain. I need a scarecrow in a shirt the color of a fire truck. | a red scarecrow |
+| Lighthouse | The keeper | Ships cannot spot the island. Raise a flag the color of the sky. | a blue flag |
+| Lighthouse | The keeper | The way up to my tower is too dark at night. Three lanterns along the path. | 3 lanterns along the path |
+| Camp | The scouts | Two of us arrive tonight and we each need a tent. The color of a pumpkin, please. | 2 orange tents |
+| Camp | The scouts | Story night needs something spooky. A campfire with flames the color of a frog. | a green campfire |
+| Orchard | Farmer Lu | The orchard is short on fruit. Plant me a couple of round trees. | 2 round trees |
+| Orchard | Farmer Lu | The bees lost their home in the storm. Build them a hive the color of milk. | a white beehive |
+
+| Landmark | Other uses |
 |---|---|
-| Red Cottage | The roof looks empty since the birds flew south. Put a yellow bird on the roof. / Guests keep tripping at night. Hang 2 lanterns by the door |
-| Blue Cottage | The front yard looks bare. Plant 3 pink flower beds out front. / The garden needs a border. Build a white fence beside the cottage |
-| Dock and Pond | The fisher needs a ride. Tie a red boat to the dock. / The pond feels lonely. Put 2 ducks on the pond |
-| Well | Something odd grows in the shade. Plant 3 purple mushrooms by the well. / Travelers need a place to rest. Put a green bench next to the well |
-| Windmill | The miller wants a small flock. Put 2 sheep by the windmill. / Crows keep stealing grain. Stand a scarecrow in a red shirt by the windmill |
-| Lighthouse | Ships cannot spot the island. Raise a blue flag by the lighthouse. / The path is too dark to walk. Light 3 lanterns on the lighthouse path |
-| Camp | Campers arrive tonight. Pitch 2 orange tents at the camp. / Story night needs something spooky. Light a green campfire at the camp |
-| Orchard | The orchard is short on fruit. Plant 2 round trees in the orchard. / The bees need a new home. Put a white beehive by the orchard |
 | Power Shed | Fixes the lights. No tasks |
 | Meeting Bell | Center of the island. Calls meetings. No tasks |
 
@@ -57,11 +68,15 @@ Every task names the place, the object, at least one detail (a color or a count)
 ## 5. Tasks
 
 - Each crew member gets **3 tasks** at 3 different landmarks. No two players get the same task.
-- **Doing a task:** walk within range of the landmark, open the order box and type your own prompt. The box starts empty, so the player turns the task into a prompt. Building takes 8 seconds standing at the landmark, with a progress ring. Walking away cancels it.
-- **Vague prompts:** the builder follows a specific prompt exactly. When a prompt leaves out a detail the task needs, like the color or how many, the builder fills the gap itself. It matches the task about 1 time in 3 and picks something else the rest of the time. A specific prompt never gets a made up detail.
-- **Feedback:** after a build that misses, one line says what was off, for example "You built 1 white bird. The task needs a yellow bird. Your prompt did not say the color." The game over screen shows how many of your tasks you finished on the first prompt.
-- **Checking:** the server checks the landmark after every order. A task is done when the owner has at least the required number of the required object there, in the required color if the task names one. The builder picks colors from a fixed list (red, orange, yellow, green, blue, pink, purple, white, black, brown), so the check is exact.
-- **Extra builds are fine.** "A yellow bird wearing a tiny hat" still counts. A volcano at the cottage does not.
+- **Doing a task:** walk within range of the landmark, open the order box and type your own prompt. The box starts empty and shows the request. Building takes 8 seconds standing at the landmark, with a progress ring. Walking away cancels it.
+- **What the builder reads:** the object, how many, the color and the place.
+- **Places:** a few words send things to a spot at a landmark: on the roof, by the door, out front, at the dock, in the pond, along the path. Without a place word, things go anywhere at the landmark, away from those spots. Boats always float. Ducks float only when the prompt puts them in the water.
+- **Missing details:** the builder uses its own default, the same every time. No color gives the object's usual color, so a bird comes out brown. No number gives 1, or 3 for a plural like "ducks". The builder never sees the task, so it can never guess the hidden answer.
+- **The "I read" card:** while building, the order box shows how each part of the prompt was read, for example "I read: a bird. Color: you didn't say, so I made it brown. Place: you didn't say, so I put it by the Red Cottage."
+- **Fix it by talking:** a prompt can change what you already built at that landmark: "make it yellow", "move them to the pond", "remove one duck". An edit takes 3 seconds.
+- **Feedback:** after a miss, one line says which part is off without giving the answer, for example "Not done yet: the color and the place are not what Mira asked for. Read the request again." After a second miss on the same task, it says exactly what was asked for. The game over screen shows how many of your tasks you finished on the first prompt.
+- **Checking:** the server checks the landmark after every order. A task is done when the owner has the required object there in the required color and place. A count task needs exactly that many. The builder picks colors from a fixed list (red, orange, yellow, green, blue, pink, purple, white, black, brown), so the check is exact.
+- **Extra builds are fine.** Other objects at the landmark do not matter. A third duck does, because the task asks for two.
 - **Task bar:** shared and public. It shows done tasks out of total tasks.
 
 ---
@@ -71,7 +86,7 @@ Every task names the place, the object, at least one detail (a color or a count)
 | Ability | Rule |
 |---|---|
 | Fake tasks | A list of 3 tasks like the crew's. Standing at the landmark does nothing |
-| Wreck | Stand within range of a finished task and tell the builder what to do to it, like "knock the bird off" or "paint it black". Quick buttons: Knock over, Paint black, Take away. A wreck takes 4 seconds standing still, half the time a build takes, and walking away cancels it. The task becomes broken, and the task bar drops. Cooldown 30 seconds. The first wreck is ready 20 seconds after the game starts |
+| Wreck | Stand within range of a finished task and tell the builder what to do to it, like "knock the bird off" or "paint it black". Quick buttons: Knock over, Paint black, Take away. A wreck takes 4 seconds standing still, half the time a build takes, and walking away cancels it. The wreck hits every object of that task, so both tents fall, not one. The task becomes broken, and the task bar drops. Cooldown 30 seconds. The first wreck is ready 20 seconds after the game starts |
 | Lights out | Usable anywhere. Crew vision shrinks to 1.8 units for 30 seconds, or until a crew member fixes it at the Power Shed. Cooldown 45 seconds |
 
 The Impostor's builder can knock over, recolor and remove objects. The crew's builder can only add and recolor.
@@ -141,7 +156,7 @@ These get tuned during testing.
 | Wreck time | 4 seconds at the landmark |
 | Wreck cooldown | Human 30 seconds, first ready at 20 seconds. AI first at 75 seconds, then every 60 to 80 seconds |
 | Lights out | 30 seconds, cooldown 45 seconds. AI at most twice a game |
-| Gap fill match rate | 1 in 3 |
+| Edit time | 3 seconds, for prompts that only change what you built |
 | Bell rings | 1 per player, locked 15 seconds after a meeting |
 | Discussion and voting | 60 seconds and 30 seconds |
 | Show whether the ejected player was the Impostor | On |
@@ -156,14 +171,15 @@ These get tuned during testing.
 | Menu | Create a game, or join with a 4 letter code |
 | Lobby | Follow view so players can walk while they wait. A side panel with the code, an invite link, 6 seats, and Start for the host |
 | Role reveal | Crew or Impostor in large type, with the goal in one line |
-| Play | Follow camera. Top left: task list and task bar. Top right: night clock, a small island map (your position and your task landmarks, never other players), and the player list. Bottom right: action buttons that light up in range (Build, Report, Fix lights, Bell). Top center: alerts |
+| Play | Follow camera. Top left: task list (each task shows who asks and their request) and task bar. Top right: night clock, a small island map (your position and your task landmarks, never other players), and the player list. Bottom right: action buttons that light up in range (Build, Report, Fix lights, Bell). Top center: alerts |
+| Practice | From the menu: Practice with the builder. A solo round with 4 tasks at different landmarks, no Impostor, no AI players, no meetings and no night clock. The clock card says Practice. It ends when every task is done, with the first prompt score and Practice again |
 | Game menu | A button beside the title. Leave game for anyone: in the lobby the seat frees up; during a game an AI player takes over your islander with the same role and tasks, and the host role passes to the next human. End game for the host only: nobody wins and everyone sees the Impostor. Both need a second click |
-| Order box | Opens at a landmark. Shows your task there with its details and reason, an empty prompt field and a Build button. While building, a progress ring. After a miss, one line on what the prompt left out. The Impostor also sees the wreck buttons |
+| Order box | Opens at a landmark. Shows the request from the person who lives there, an empty prompt field and a Build button. While building, a progress ring and the "I read" card. After a miss, the card stays with one line on which part is off, and the prompt stays in the box so it can be fixed. The Impostor also sees the wreck buttons |
 | Meeting | Chat on one side with a typing indicator for AI players, islanders seated around the bell, then the vote grid. Chat stays open while voting, and votes can be changed until time runs out |
 | Ejection | Space background, the islander drifting away, the result typing out |
 | End | Who won and why, who the Impostor was, how many of your tasks you finished on the first prompt, Play again |
 
-Controls: WASD or arrow keys, or click the ground to walk. Drag to turn the camera around you; movement keys follow the camera, so W walks away from you. Scroll to zoom. E opens the order box, R reports. Every action also has a button for mouse and touch.
+Controls: WASD or arrow keys, or click the ground to walk. Swipe sideways with two fingers on a touchpad, or drag, to turn the view around you, and your islander turns to face the same way. Movement keys follow the view, so W walks away from you. Scroll or pinch to zoom the game. E opens the order box, R reports. Every action also has a button for mouse and touch.
 
 ---
 

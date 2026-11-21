@@ -12,7 +12,7 @@ import { landmarkById } from '../game/landmarks'
 import { makeRng } from '../game/placement'
 import { assignRoles } from '../game/rules'
 import { taskTemplate } from '../game/tasks'
-import { BUILD_MS, INTRO_MS, MEETING_MS, VOTE_GRACE_MS, VOTE_MS, EJECT_MS, PLAY_MS, WRECK_MS } from '../game/constants'
+import { BUILD_MS, EDIT_MS, INTRO_MS, MEETING_MS, VOTE_GRACE_MS, VOTE_MS, EJECT_MS, PLAY_MS, WRECK_MS } from '../game/constants'
 
 type Rec = { recordId: string; data: Record<string, unknown>; createdAt: string }
 
@@ -314,11 +314,15 @@ describe('a full game through the server actions', () => {
     expect(rowsOf(t, 'games')[0].data.lightsOutUntil).toBe(0)
   })
 
-  it('walking away stops a build, and a vague prompt gets a guessed detail with an explanation', async () => {
+  it("walking away stops a build, and a vague prompt gets the builder's defaults, a reading and a hint", async () => {
     const { t, gameId, players } = await setup(2)
     const me = players[0]
     const tasks = rowsOf(t, 'tasks', { gameId, playerId: me.recordId })
-    const task = tasks.find((x) => taskTemplate(x.data.templateId as string)?.need.color) ?? tasks[0]
+    // A task with a hidden color or place: the builder's defaults can never satisfy those by luck.
+    const task = tasks.find((x) => {
+      const n = taskTemplate(x.data.templateId as string)?.need
+      return Boolean(n?.color || n?.place)
+    }) ?? tasks[0]
     const tpl = taskTemplate(task.data.templateId as string)!
     const lm = landmarkById(tpl.landmarkId)!
     const stand = { x: lm.x * (1 - 1.6 / Math.hypot(lm.x, lm.z)), z: lm.z * (1 - 1.6 / Math.hypot(lm.x, lm.z)) }
@@ -333,15 +337,59 @@ describe('a full game through the server actions', () => {
     await walk(t, gameId, 'u1', stand)
     expect((await call(t.tools, 'game-build-finish', 'u1', { gameId })).success).toBe(false)
 
-    // Leave out every detail: just the object word.
+    // Leave out every detail: just the object word. The builder fills in its defaults, never the hidden answer.
     await walk(t, gameId, 'u1', stand)
     advance(5000)
     const vague = await build(t, gameId, 'u1', lm.id, tpl.need.type.replace('_', ' '))
     expect(vague.success, vague.error).toBe(true)
-    const done = ((vague.data?.completed as string[]) ?? []).includes(tpl.id)
-    const feedback = (vague.data?.feedback as string[]) ?? []
-    if (!done) expect(feedback.join(' ')).toMatch(/The task needs/)
+    expect((vague.data?.completed as string[]) ?? []).not.toContain(tpl.id)
+    expect(((vague.data?.reading as string[]) ?? []).join(' ')).toMatch(/I read:/)
+    expect(((vague.data?.reading as string[]) ?? []).join(' ')).toMatch(/you didn't say/)
+    const first = ((vague.data?.feedback as string[]) ?? []).join(' ')
+    expect(first).toMatch(/Not done yet/)
+    expect(first).toMatch(/Read the request again/)
     expect(rowsOf(t, 'tasks', { gameId }).find((x) => x.recordId === task.recordId)?.data.tries).toBe(1)
+
+    // A second miss says exactly what was asked for.
+    advance(5000)
+    const again = await build(t, gameId, 'u1', lm.id, tpl.need.type.replace('_', ' '))
+    expect(((again.data?.feedback as string[]) ?? []).join(' ')).toContain(`${tpl.who} wants`)
+
+    // Fix it by talking: clear them away, then ask properly.
+    advance(5000)
+    const cleared = await build(t, gameId, 'u1', lm.id, `remove all the ${tpl.need.type.replace('_', ' ')}s`)
+    expect(cleared.success, cleared.error).toBe(true)
+    expect(rowsOf(t, 'builds', { gameId, playerId: me.recordId }).filter((b) => b.data.type === tpl.need.type)).toHaveLength(0)
+    advance(5000)
+    const right = await build(t, gameId, 'u1', lm.id, tpl.order)
+    expect((right.data?.completed as string[]) ?? []).toContain(tpl.id)
+  })
+
+  it('edits change what you built: a recolor finishes a color task in the short edit time', async () => {
+    const { t, gameId, players } = await setup(2)
+    const me = players[0]
+    // Give this player Old Wen's bench task (a green bench, no place, one of it).
+    const tasks = rowsOf(t, 'tasks', { gameId, playerId: me.recordId })
+    const task = tasks[0]
+    for (const x of tasks) if (x !== task && x.data.landmarkId === 'well') Object.assign(x.data, { templateId: 'mill_sheep', landmarkId: 'windmill' })
+    Object.assign(task.data, { templateId: 'well_bench', landmarkId: 'well' })
+    const tpl = taskTemplate('well_bench')!
+    const lm = landmarkById(tpl.landmarkId)!
+    const stand = { x: lm.x * (1 - 1.6 / Math.hypot(lm.x, lm.z)), z: lm.z * (1 - 1.6 / Math.hypot(lm.x, lm.z)) }
+    await walk(t, gameId, 'u1', stand)
+    advance(5000)
+    const noun = tpl.need.type.replace('_', ' ')
+    const plain = await build(t, gameId, 'u1', lm.id, `a ${noun}`)
+    expect((plain.data?.completed as string[]) ?? []).not.toContain(tpl.id)
+    advance(5000)
+    const start = await call(t.tools, 'game-build', 'u1', { gameId, landmarkId: lm.id, text: `make it ${tpl.need.color}` })
+    expect(start.success, start.error).toBe(true)
+    expect(start.data?.ms).toBe(EDIT_MS)
+    expect(((start.data?.reading as string[]) ?? []).join(' ')).toMatch(new RegExp(`make .* ${tpl.need.color}`))
+    advance(EDIT_MS)
+    const done = await call(t.tools, 'game-build-finish', 'u1', { gameId })
+    expect((done.data?.completed as string[]) ?? []).toContain(tpl.id)
+    expect(rowsOf(t, 'builds', { gameId, playerId: me.recordId }).filter((b) => b.data.type === tpl.need.type)).toHaveLength(1)
   })
 
   it('AI players answer a human who talks to them, and a meeting chat stays open while voting', async () => {
@@ -421,5 +469,40 @@ describe('a full game through the server actions', () => {
     expect(rowsOf(t, 'players', { gameId })).toHaveLength(2)
     expect((await call(t.tools, 'game-leave', 'u2', { gameId })).success).toBe(true)
     expect(rowsOf(t, 'players', { gameId })).toHaveLength(1)
+  })
+
+  it('practice is just you and the builder, and ends when every task is done', async () => {
+    const t = fakeTools()
+    const started = await call(t.tools, 'game-practice', 'u1')
+    expect(started.success, started.error).toBe(true)
+    const { gameId } = started.data as { gameId: string }
+    const g0 = rowsOf(t, 'games')[0].data
+    expect(g0.mode).toBe('practice')
+    expect(g0.phase).toBe('play')
+    expect(rowsOf(t, 'players', { gameId })).toHaveLength(1)
+    const tasks = rowsOf(t, 'tasks', { gameId })
+    expect(tasks).toHaveLength(4)
+    expect(rowsOf(t, 'secrets', { gameId })[0].data.role).toBe('crew')
+    // No clock: ticking for a long time changes nothing, and the bell does not work.
+    advance(PLAY_MS * 2)
+    await call(t.tools, 'game-tick', 'u1', { gameId })
+    expect(rowsOf(t, 'games')[0].data.phase).toBe('play')
+    await walk(t, gameId, 'u1', { x: 1.2, z: 0.6 })
+    expect((await call(t.tools, 'game-bell', 'u1', { gameId })).error).toMatch(/no meetings in practice/)
+    // Specific prompts finish every task, then practice is complete.
+    for (const task of tasks) {
+      const tpl = taskTemplate(task.data.templateId as string)!
+      const lm = landmarkById(tpl.landmarkId)!
+      const d = Math.hypot(lm.x, lm.z)
+      await walk(t, gameId, 'u1', { x: lm.x * (1 - 1.6 / d), z: lm.z * (1 - 1.6 / d) })
+      advance(5_000)
+      const r = await build(t, gameId, 'u1', lm.id, tpl.order)
+      expect(r.success, r.error).toBe(true)
+      expect(r.data?.completed).toContain(tpl.id)
+    }
+    const g = rowsOf(t, 'games')[0].data
+    expect(g.phase).toBe('over')
+    expect(g.winReason).toBe('You finished every practice task.')
+    expect(rowsOf(t, 'tasks', { gameId }).every((x) => x.data.firstTry === 1)).toBe(true)
   })
 })

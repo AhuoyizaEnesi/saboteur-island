@@ -237,8 +237,10 @@ export class IslandScene {
   private shedPanel: THREE.MeshStandardMaterial | null = null
   private raycaster = new THREE.Raycaster()
   private pointerDown: { x: number; y: number; t: number; yaw: number; dragging: boolean } | null = null
-  /** Follow camera angle around the player, turned by dragging. 0 looks north from the south. */
+  /** Follow camera angle around the player, turned by dragging or a two finger swipe. 0 looks north from the south. */
   private followYaw = 0
+  /** When the view was last turned, so the player's islander turns to face the same way. */
+  private faceViewAt = -10
   private lastInteract = 0
   private tmpV = new THREE.Vector3()
 
@@ -356,7 +358,8 @@ export class IslandScene {
     el.addEventListener('pointerup', this.onPointerUp)
     el.addEventListener('pointercancel', this.onPointerCancel)
     el.style.touchAction = 'none'
-    el.addEventListener('wheel', this.onWheel, { passive: true })
+    // Not passive: a sideways swipe or a pinch must not scroll, zoom or navigate the page.
+    el.addEventListener('wheel', this.onWheel, { passive: false })
     window.addEventListener('resize', this.onResize)
     window.addEventListener('keydown', this.onKeyDown)
     window.addEventListener('keyup', this.onKeyUp)
@@ -389,7 +392,9 @@ export class IslandScene {
       const painted = b.state === 'painted'
       const root = buildModel(this.fx, b.type, b.color && !painted ? b.color : undefined)
       if (painted) paintOver(root, b.color || '#1f1b2a')
-      const y = this.isWater(b.type) ? POND_Y - 0.01 : b.type === 'dock' ? POND_Y - 0.02 : terrainH(b.x, b.z) - 0.02 + (b.lift ?? 0)
+      // Water things float only when they are actually in the pond; a duck on the grass sits on the grass.
+      const inPond = Math.hypot(b.x - ISLAND.POND.x, b.z - ISLAND.POND.z) < ISLAND.POND.r
+      const y = this.isWater(b.type) && inPond ? POND_Y - 0.01 : b.type === 'dock' ? POND_Y - 0.02 : terrainH(b.x, b.z) - 0.02 + (b.lift ?? 0)
       root.position.set(b.x, y, b.z)
       root.rotation.y = b.rot
       if (b.state === 'knocked') {
@@ -1331,6 +1336,7 @@ export class IslandScene {
     }
     const w = this.container.clientWidth || window.innerWidth
     this.followYaw = d.yaw - (dx / w) * Math.PI * 1.6
+    this.faceViewAt = this.elapsed
   }
 
   private onPointerCancel = () => {
@@ -1361,8 +1367,24 @@ export class IslandScene {
   }
 
   private onWheel = (e: WheelEvent) => {
-    if (this.camMode !== 'follow') return
-    this.followZoom = clamp(this.followZoom * (e.deltaY > 0 ? 1.08 : 0.93), 0.6, 1.8)
+    if (this.camMode !== 'follow' || this.meeting) return
+    e.preventDefault()
+    // A touchpad pinch arrives as a wheel event with ctrlKey: zoom the game, not the page.
+    if (e.ctrlKey) {
+      this.followZoom = clamp(this.followZoom * Math.exp(e.deltaY * 0.01), 0.6, 1.8)
+      return
+    }
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1
+    const dx = e.deltaX * unit
+    const dy = e.deltaY * unit
+    if (Math.abs(dx) > Math.abs(dy)) {
+      // Two fingers sideways turns the view around you, like looking around in Minecraft.
+      this.followYaw -= dx * 0.006
+      this.faceViewAt = this.elapsed
+      return
+    }
+    // Up and down zooms in proportion to the swipe, so a touchpad does not jump.
+    this.followZoom = clamp(this.followZoom * Math.exp(dy * 0.0012), 0.6, 1.8)
   }
 
   private static MOVE_KEYS: Record<string, [number, number]> = {
@@ -1793,6 +1815,8 @@ export class IslandScene {
         }
         c.target = null
       }
+      // Turning the view while standing still turns your islander to face the same way.
+      if (controlled && !moving && this.elapsed - this.faceViewAt < 0.8) turn(-Math.sin(this.followYaw), -Math.cos(this.followYaw))
       if (controlled && moving) this.opts.onMyMove?.(c.pos.x, c.pos.y)
       c.walkPhase += dt * (moving ? 14 : 2)
       const ground = terrainH(c.pos.x, c.pos.y) + (c.ghost ? 0.35 + Math.sin(t * 1.6 + c.walkPhase * 0.1) * 0.08 : 0)

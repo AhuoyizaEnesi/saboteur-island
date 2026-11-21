@@ -6,6 +6,8 @@
 export const MIN_PLAYERS = 5
 export const MAX_PLAYERS = 6
 export const TASKS_PER_CREW = 3
+/** Tasks in a practice round, each at a different landmark. */
+export const PRACTICE_TASKS = 4
 
 export const INTRO_MS = 7_000
 /** Play time until night falls, not counting meetings. */
@@ -33,8 +35,8 @@ export const WRECK_MS = 4_000
 /** How early a finish may arrive, for network lag; and how long a started job stays valid. */
 export const JOB_SLACK_MS = 1_200
 export const JOB_EXPIRES_MS = 30_000
-/** When a prompt leaves out a detail the task needs, the builder's guess matches this often. */
-export const GUESS_RATE = 1 / 3
+/** A prompt that only changes what you already built (recolor, move, remove) is quicker. */
+export const EDIT_MS = 3_000
 
 /** AI Impostor pacing, slower than a human's cooldowns. */
 export const BOT_FIRST_WRECK_MS = 75_000

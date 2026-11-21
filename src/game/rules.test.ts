@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { legalMove, seatSpot } from '../actions/game'
-import { __test as builder, fillGaps, saidColor, saidCount } from '../server/builder-agent'
+import { __test as builder } from '../server/builder-agent'
 import { addressedBot, chatHeat, heuristicMeeting, heuristicReply, heuristicVotes, notesFor, type MeetingInput } from '../server/meeting-ai'
 import { BOT_SPEED, routeDone, routePos, stayLeg, walkLeg } from './bots'
 import { ISLAND, MEETING_SPOT, POS_SLACK, WALK_SPEED } from './constants'
@@ -8,6 +8,7 @@ import { LANDMARKS, landmarkById, walkable } from './landmarks'
 import { footprint, makeRng, placeOne, type PlacedLike } from './placement'
 import { assignRoles, decideWinner, makeCode, normalizeCode, skyFor, tally } from './rules'
 import { dealTasks, explainMiss, fakeTasks, needLabel, slotOf, spotAtLandmark, taskDone, TASKS, taskTemplate } from './tasks'
+import { DEFAULT_COLOR, placesIn, readingLines, saidColor, saidCount } from './prompting'
 import { streamInfo } from './terrain'
 
 describe('tally', () => {
@@ -73,23 +74,41 @@ describe('tasks', () => {
     expect(fake).toHaveLength(3)
     expect(new Set(fake.map((t) => taskTemplate(t)?.landmarkId)).size).toBe(3)
   })
-  it('is done only by its owner, with the right type and color, still standing', () => {
+  it('is done only by its owner, with the right type, color and place, still standing', () => {
     const task = { playerId: 'p1', templateId: 'red_bird' }
-    const bird = { playerId: 'p1', landmarkId: 'red_cottage', type: 'bird', colorName: 'yellow', state: 'ok' }
+    const bird = { playerId: 'p1', landmarkId: 'red_cottage', type: 'bird', colorName: 'yellow', state: 'ok', placeTag: 'roof' }
     expect(taskDone(task, [bird])).toBe(true)
     expect(taskDone(task, [{ ...bird, playerId: 'p2' }])).toBe(false)
     expect(taskDone(task, [{ ...bird, colorName: 'red' }])).toBe(false)
     expect(taskDone(task, [{ ...bird, landmarkId: 'well' }])).toBe(false)
     expect(taskDone(task, [{ ...bird, state: 'knocked' }])).toBe(false)
     expect(taskDone(task, [{ ...bird, state: 'painted', colorName: 'black' }])).toBe(false)
+    expect(taskDone(task, [{ ...bird, placeTag: '' }])).toBe(false)
   })
-  it('puts a task object in its slot, so the bird really sits on the roof', () => {
+  it('puts a bird on the roof only when the prompt says so', () => {
     const l = landmarkById('red_cottage')!
-    const s = spotAtLandmark(l, 'bird', [], makeRng(1))
     const want = slotOf(taskTemplate('red_bird')!)
-    expect(s.x).toBeCloseTo(want.x)
-    expect(s.z).toBeCloseTo(want.z)
-    expect(s.lift).toBeGreaterThan(1)
+    const asked = spotAtLandmark(l, 'bird', [], makeRng(1), ['roof'])
+    expect(asked.x).toBeCloseTo(want.x)
+    expect(asked.z).toBeCloseTo(want.z)
+    expect(asked.lift).toBeGreaterThan(1)
+    expect(asked.place).toBe('roof')
+    for (let seed = 1; seed < 20; seed++) {
+      const plain = spotAtLandmark(l, 'bird', [], makeRng(seed))
+      expect(plain.place).toBeNull()
+      expect(plain.lift).toBe(0)
+      expect(Math.hypot(plain.x - want.x, plain.z - want.z)).toBeGreaterThan(0.85)
+    }
+  })
+  it('floats ducks only when the prompt puts them in the water, and keeps a bench at the dock on land', () => {
+    const l = landmarkById('dock')!
+    const { POND } = ISLAND
+    const inPond = (p: { x: number; z: number }) => Math.hypot(p.x - POND.x, p.z - POND.z) < POND.r
+    expect(inPond(spotAtLandmark(l, 'duck', [], makeRng(4), ['pond']))).toBe(true)
+    for (let seed = 1; seed < 15; seed++) expect(inPond(spotAtLandmark(l, 'duck', [], makeRng(seed)))).toBe(false)
+    const bench = spotAtLandmark(l, 'bench', [], makeRng(5), ['dock'])
+    expect(inPond(bench)).toBe(false)
+    expect(bench.place).toBe('dock')
   })
   it('puts a second one elsewhere in the landmark area once the slot is taken', () => {
     const l = landmarkById('well')!
@@ -243,79 +262,96 @@ describe('meeting AI with no clues', () => {
   })
 })
 
-describe('tasks with details', () => {
-  it('every task names a reason and at least one detail besides the object', () => {
+describe('tasks as requests', () => {
+  it('every task is a request from someone, with at least one detail besides the object', () => {
     for (const t of TASKS) {
-      expect(t.reason.length).toBeGreaterThan(10)
-      expect(Boolean(t.need.color) || (t.need.count ?? 1) > 1).toBe(true)
+      expect(t.who.length).toBeGreaterThan(2)
+      expect(t.request.length).toBeGreaterThan(30)
+      expect(Boolean(t.need.color) || (t.need.count ?? 1) > 1 || Boolean(t.need.place)).toBe(true)
     }
   })
-  it('a count task needs that many matching objects', () => {
+  it('never spells the checklist out word for word in the request', () => {
+    for (const t of TASKS) {
+      expect(t.request.toLowerCase()).not.toContain(t.text.toLowerCase())
+      if (t.need.color) expect(t.request.toLowerCase()).not.toMatch(new RegExp(`\\b${t.need.color}\\b`))
+    }
+  })
+  it('a count task needs exactly that many', () => {
     const tpl = taskTemplate('dock_duck')!
     const task = { playerId: 'p', templateId: tpl.id }
-    const duck = { playerId: 'p', landmarkId: tpl.landmarkId, type: 'duck', colorName: '', state: 'ok' }
+    const duck = { playerId: 'p', landmarkId: tpl.landmarkId, type: 'duck', colorName: '', state: 'ok', placeTag: 'pond' }
     expect(taskDone(task, [duck])).toBe(false)
     expect(taskDone(task, [duck, duck])).toBe(true)
+    expect(taskDone(task, [duck, duck, duck])).toBe(false)
     expect(taskDone(task, [duck, { ...duck, state: 'knocked' }])).toBe(false)
+    expect(taskDone(task, [duck, { ...duck, placeTag: '' }])).toBe(false)
   })
   it('labels needs in plain words', () => {
-    expect(needLabel(taskTemplate('red_bird')!.need)).toBe('a yellow bird')
+    expect(needLabel(taskTemplate('red_bird')!.need)).toBe('a yellow bird on the roof')
     expect(needLabel(taskTemplate('camp_tent')!.need)).toBe('2 orange tents')
-    expect(needLabel(taskTemplate('blue_flowers')!.need)).toBe('3 pink flower beds')
+    expect(needLabel(taskTemplate('blue_flowers')!.need)).toBe('3 pink flower beds out front')
   })
-  it('extra objects for a count task cluster next to the task spot', () => {
+  it('extra objects for a place task cluster next to the spot', () => {
     const tpl = taskTemplate('light_lantern')!
     const l = landmarkById(tpl.landmarkId)!
     const s = slotOf(tpl)
     const placed: { type: string; x: number; z: number }[] = []
     const rng = makeRng(3)
-    for (let i = 0; i < 3; i++) placed.push({ type: 'lantern', ...spotAtLandmark(l, 'lantern', placed, rng) })
+    for (let i = 0; i < 3; i++) placed.push({ type: 'lantern', ...spotAtLandmark(l, 'lantern', placed, rng, ['path']) })
     for (const p of placed) expect(Math.hypot(p.x - s.x, p.z - s.z)).toBeLessThan(1.6)
   })
-  it('explains a miss in terms of what the prompt left out', () => {
+  it('says which part missed first, and the exact ask after a second miss', () => {
     const tpl = taskTemplate('red_bird')!
-    const white = { playerId: 'p', landmarkId: tpl.landmarkId, type: 'bird', colorName: 'white', state: 'ok' }
-    expect(explainMiss(tpl, [white], { color: 'white' })).toBe('You built 1 white bird. The task needs a yellow bird. Your prompt did not say the color, so the builder picked white.')
-    expect(explainMiss(tpl, [])).toMatch(/The task needs a yellow bird/)
+    const brown = { playerId: 'p', landmarkId: tpl.landmarkId, type: 'bird', colorName: 'brown', state: 'ok', placeTag: '' }
+    expect(explainMiss(tpl, [brown], false)).toBe('Not done yet: the color and the place are not what Mira asked for. Read the request again.')
+    expect(explainMiss(tpl, [brown], true)).toBe('Not done yet: the color and the place are not what Mira asked for. Mira wants a yellow bird on the roof.')
+    expect(explainMiss(tpl, [{ ...brown, colorName: 'yellow' }], false)).toBe('Not done yet: the place is not what Mira asked for. Read the request again.')
+    expect(explainMiss(tpl, [], false)).toMatch(/not what Mira asked for/)
     const tents = taskTemplate('camp_tent')!
     const one = { playerId: 'p', landmarkId: tents.landmarkId, type: 'tent', colorName: 'orange', state: 'ok' }
-    expect(explainMiss(tents, [one], { count: 1 })).toBe('You have 1 orange tent. The task needs 2. Your prompt did not say how many, so the builder made 1.')
+    expect(explainMiss(tents, [one], false)).toBe('Not done yet: you have 1 and the scouts asked for a different number. Read the request again.')
+    expect(explainMiss(tents, [one, one], false)).toBe('')
   })
 })
 
-describe('vague prompts', () => {
-  const bird = { type: 'bird' as const, color: 'yellow' as const }
+describe('reading a prompt', () => {
+  it('finds place words in the order they are said', () => {
+    expect(placesIn('a yellow bird on the roof')).toEqual(['roof'])
+    expect(placesIn('two ducks floating in the pond near the dock')).toEqual(['pond', 'dock'])
+    expect(placesIn('a bird')).toEqual([])
+  })
   it('knows when a prompt names a color or a number', () => {
     expect(saidColor('a yellow bird on the roof')).toBe(true)
     expect(saidColor('a bird on the roof')).toBe(false)
     expect(saidCount('2 ducks')).toBe(true)
     expect(saidCount('two ducks please')).toBe(true)
     expect(saidCount('some ducks')).toBe(false)
-    expect(saidCount('ducks on the pond')).toBe(false)
   })
-  it('leaves a specific prompt alone', () => {
-    const out = fillGaps([{ type: 'bird', color: 'yellow' }], [bird], 'a yellow bird on the roof', makeRng(1))
-    expect(out.guessed).toHaveLength(0)
-    expect(out.items).toEqual([{ type: 'bird', color: 'yellow' }])
+  it('fills a missing color with the same default every time', () => {
+    expect(DEFAULT_COLOR.bird).toBe('brown')
+    const lines = readingLines({ type: 'bird', count: 1, color: 'brown', colorSaid: false, place: null, placeSaid: false, landmarkName: 'Red Cottage' })
+    expect(lines).toEqual(['I read: a bird.', "Color: you didn't say, so I made it brown.", "Place: you didn't say, so I put it by the Red Cottage."])
   })
-  it('makes up a missing color, right about 1 time in 3', () => {
-    let right = 0
-    for (let seed = 1; seed <= 600; seed++) {
-      const out = fillGaps([{ type: 'bird', color: null }], [bird], 'a bird on the roof', makeRng(seed))
-      expect(out.guessed[0]?.color).toBeTruthy()
-      if (out.items[0].color === 'yellow') right++
-    }
-    expect(right / 600).toBeGreaterThan(0.25)
-    expect(right / 600).toBeLessThan(0.42)
+  it('echoes what the prompt did say', () => {
+    const lines = readingLines({ type: 'bird', count: 1, color: 'yellow', colorSaid: true, place: 'roof', placeSaid: true, landmarkName: 'Red Cottage' })
+    expect(lines).toEqual(['I read: a yellow bird.', 'Place: on the roof, like you said.'])
   })
-  it('makes up a missing count for a count task', () => {
-    const need = { type: 'duck' as const, count: 2 }
-    const out = fillGaps([{ type: 'duck', color: null }, { type: 'duck', color: null }], [need], 'ducks on the pond', makeRng(9))
-    expect(out.guessed[0]?.count).toBe(out.items.length)
+})
+
+describe('builder edits', () => {
+  it('reads plain edit requests', () => {
+    expect(builder.keywordBuild({ text: 'make it yellow', capacity: 10 }).ops).toEqual([{ op: 'recolor', type: null, color: 'yellow' }])
+    expect(builder.keywordBuild({ text: 'paint the bird yellow', capacity: 10 }).ops).toEqual([{ op: 'recolor', type: 'bird', color: 'yellow' }])
+    expect(builder.keywordBuild({ text: 'move them to the pond', capacity: 10 }).ops).toEqual([{ op: 'move', type: null }])
+    expect(builder.keywordBuild({ text: 'remove one duck', capacity: 10 }).ops).toEqual([{ op: 'remove', type: 'duck', count: 1 }])
   })
-  it('does not touch objects no task here needs', () => {
-    const out = fillGaps([{ type: 'rock', color: null }], [bird], 'a rock', makeRng(2))
-    expect(out.guessed).toHaveLength(0)
+  it('still treats a new thing as a new thing', () => {
+    const p = builder.keywordBuild({ text: 'make a yellow bird on the roof', capacity: 10 })
+    expect(p.ops).toEqual([{ op: 'add', type: 'bird', color: 'yellow', count: 1 }])
+  })
+  it('makes 3 for a plural with no number, 1 for a singular', () => {
+    expect(builder.keywordBuild({ text: 'ducks in the pond', capacity: 10 }).items).toHaveLength(3)
+    expect(builder.keywordBuild({ text: 'a duck in the pond', capacity: 10 }).items).toHaveLength(1)
   })
 })
 

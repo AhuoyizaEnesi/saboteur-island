@@ -56,6 +56,7 @@ export const gamesSchema: CollectionSchema = {
     text('winReason', 300),
     json('reveal'),
     json('botVotes'),
+    text('mode'),
     num('replyCalls'),
     text('nextCode', 8),
     num('seed'),
@@ -137,6 +138,7 @@ export const buildsSchema: CollectionSchema = {
     text('state'),
     num('seq'),
     num('at'),
+    text('placeTag'),
   ],
   permissions: publicRead,
 }
