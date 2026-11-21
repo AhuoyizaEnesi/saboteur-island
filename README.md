@@ -82,5 +82,5 @@ The server decides everything that matters. The AI builder only proposes catalog
 ## More
 
 - [SPEC.md](./SPEC.md): the full rules and numbers.
-- [ISSUES.md](./ISSUES.md): known limits, and every fix made after testing.
+- [DESIGN-NOTES.md](./DESIGN-NOTES.md): the tradeoffs, and what playtesting changed.
 - [docs/CODE-TOUR.md](./docs/CODE-TOUR.md): a walkthrough of the code.

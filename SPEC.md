@@ -124,7 +124,7 @@ The Impostor's builder can knock over, recolor and remove objects. The crew's bu
 - The camera follows your islander from above and behind, in the lobby too. The role reveal and the end screen use the orbit view.
 - You see other islanders within your vision circle: crew 5 units, Impostor 6 units, crew with lights out 1.8 units. Ghosts see everything.
 - Builds, landmarks and smoke are always drawn, but everything outside your circle is darkened.
-- **Known limit:** vision is drawn in the browser. Positions sit in records every player can read, so someone inspecting the raw data could see more. We accept that for a party game and list it in ISSUES.md.
+- **Known limit:** vision is drawn in the browser. Positions sit in records every player can read, so someone inspecting the raw data could see more. We accept that for a party game. See DESIGN-NOTES.md.
 
 ---
 
@@ -233,7 +233,7 @@ Controls: WASD or arrow keys, or click the ground to walk. Swipe sideways with t
 
 ### Movement and trust
 
-Presence carries live movement because it is fast and stores nothing. The server cannot read presence, so browsers also send a checkpoint every 1.5 seconds, and every action carries the caller's current position. The server rejects a position that is too far from the last checkpoint for the time passed. A cheater could still fake small moves. We accept that and list it in ISSUES.md.
+Presence carries live movement because it is fast and stores nothing. The server cannot read presence, so browsers also send a checkpoint every 1.5 seconds, and every action carries the caller's current position. The server rejects a position that is too far from the last checkpoint for the time passed. The server pulls back any move faster than walking speed. See DESIGN-NOTES.md.
 
 ### AI cost control
 
@@ -269,7 +269,6 @@ A floating island at dusk in deep space, turning to night as the clock runs down
   4. Lights out and the fix.
   5. Night falling ends the game.
   6. Phone check.
-- Non blocking bugs go into ISSUES.md during the build. Full testing happens at the end, then a fix plan.
 
 ---
 
@@ -279,15 +278,13 @@ Peace pushes to GitHub at the end of each step, about every 3 hours. I copy the 
 
 | Step | What | Done when |
 |---|---|---|
-| 0 | Push the current prototype and this spec | Commit on GitHub |
+| 0 | Push the first version and this spec | Commit on GitHub |
 | 1 | Bigger island, landmarks, follow camera, WASD and click walking, presence, checkpoints | Two browsers see each other walk |
 | 2 | Task lists, order box, builder at landmarks, task checks, task bar, night clock | Crew can finish every task before night, and night ends the game |
 | 3 | Wreck, broken spots, lights out and fix, report, bell, meeting, vote, ejection, ghosts, win checks | Two humans can play a full game |
 | 4 | AI players: routes, tasks, Impostor AI, clues, meeting dialogue | One human can play a full game as either role |
 | 5 | Vision circle, design rules pass, landing page | Passes the design rules in section 1 |
 | 6 | Tests, deploy, run sheet on the live URL | Everything in section 15 passes on the deployed app |
-
-**Cut order if we fall behind:** ghosts doing tasks (ghosts only watch), the wreck quick buttons, the AI reply to mentions. Steps 1 to 4 never get cut.
 
 ---
 
