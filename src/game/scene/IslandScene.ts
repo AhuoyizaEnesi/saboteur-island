@@ -437,8 +437,10 @@ export class IslandScene {
       if (existing) {
         existing.player = p
         existing.labelDiv.textContent = p.isMe ? `${p.name} (you)` : p.name
-        if (p.ghost && !existing.ghost) {
-          // Back as a ghost, even if the ejection is still flying on a slow screen.
+        if (p.ghost && (!existing.ghost || (existing.gone && !existing.ejecting))) {
+          // Back as a ghost, even if the ejection is still flying on a slow screen. Also bring back
+          // a ghost that ended up hidden: live updates can mark a player out a moment before the
+          // ejection starts, so they turn ghost early and the end of the flight hides them.
           this.reviveAsGhost(existing)
         } else if (!p.alive && !p.ghost && !existing.ejecting && !existing.gone && !existing.ghost) {
           // Once a ghost, never hidden for good: a later ejection must not freeze them.
