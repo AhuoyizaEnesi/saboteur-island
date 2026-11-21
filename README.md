@@ -27,6 +27,7 @@ Open http://localhost:5180 and sign in. Create a game and press Start, and empty
 
 ```
 npm run test:unit                 # rules, AI fallbacks, and whole games through the server actions
+STRESS=1 npm run test:unit        # stress: 100 full games, a chat flood, abusive prompts, players leaving
 npx deepspace test run collab     # two real accounts in two browsers
 npx deepspace deploy
 ```
