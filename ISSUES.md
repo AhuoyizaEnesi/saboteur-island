@@ -49,3 +49,7 @@ Peace's test feedback (Nov 20, late): the prompting felt off.
 Peace's feedback (Nov 21): the AI was the Impostor too often.
 - Playing alone, a person was the Impostor only 1 game in 5, because the draw was even across all 5 seats. Now each person counts 4 times as much as one AI player, so alone it is about 1 in 2.
 - Someone playing alone can now pick Random, Crew or Impostor in the lobby. With other people the pick is ignored, so nobody can tell who chose.
+
+Peace's feedback (Nov 21, midday):
+- A ghost froze after a second player was voted out. During that ejection the screen briefly stopped treating existing ghosts as ghosts, and the scene hid them for good. Now only the player being ejected changes, and a ghost is never hidden for good. Reproduced and verified in the test harness: after the second ejection the ghost walks again.
+- After picking GitHub or Google in the sign-in box and pressing back, every button stayed disabled. The SDK's sign-in box disables its buttons when you pick a provider, and the browser restored the page from memory in that state. The app now reloads when the browser restores a page that way. GitHub sign-in itself works: it reaches GitHub's authorize page.

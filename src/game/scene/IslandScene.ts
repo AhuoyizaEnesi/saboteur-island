@@ -440,7 +440,8 @@ export class IslandScene {
         if (p.ghost && !existing.ghost) {
           // Back as a ghost, even if the ejection is still flying on a slow screen.
           this.reviveAsGhost(existing)
-        } else if (!p.alive && !p.ghost && !existing.ejecting && !existing.gone) {
+        } else if (!p.alive && !p.ghost && !existing.ejecting && !existing.gone && !existing.ghost) {
+          // Once a ghost, never hidden for good: a later ejection must not freeze them.
           existing.gone = true
           existing.model.root.visible = false
           existing.label.visible = false

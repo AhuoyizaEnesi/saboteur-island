@@ -170,8 +170,9 @@ export function GameScreen({ code }: { code: string }) {
         isMe: p.id === meId,
         seat: p.data.seat,
         wanders: false,
-        // Only ghosts can see ghosts.
-        ghost: !p.data.alive && ghost && phase !== 'eject',
+        // Only ghosts can see ghosts. Only the player being ejected right now is not one yet;
+        // everyone already out stays a ghost through later ejections.
+        ghost: !p.data.alive && ghost && !(phase === 'eject' && g?.ejectedId === p.id),
       })),
     )
   }, [scene, players, meId, phase, g?.ejectedId, ghost])

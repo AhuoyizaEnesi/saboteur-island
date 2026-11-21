@@ -15,7 +15,7 @@
  * their own layout without inheriting it.
  */
 
-import { Suspense, type ReactNode } from 'react'
+import { Suspense, useEffect, type ReactNode } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Navigation from '@/components/Navigation'
 import { DeepSpaceAuthProvider, useAuthStatus } from 'deepspace'
@@ -25,6 +25,7 @@ import { APP_NAME, SCOPE_ID } from '../../constants'
 import { schemas } from '../../schemas'
 
 export default function AppLayout() {
+  useFreshAfterBack()
   return (
     <DeepSpaceAuthProvider>
       {/* The prerendered landing owns the document <title> and React drops it
@@ -35,6 +36,22 @@ export default function AppLayout() {
       </AuthBoot>
     </DeepSpaceAuthProvider>
   )
+}
+
+/**
+ * The back button can restore this page from the browser's memory, frozen as it
+ * was when you left. The SDK's sign-in box disables all its buttons the moment
+ * you pick GitHub or Google, so backing out of that page left every button dead.
+ * A fresh load on return resets the box (and reconnects live data).
+ */
+function useFreshAfterBack() {
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => {
+      if (e.persisted) window.location.reload()
+    }
+    window.addEventListener('pageshow', onShow)
+    return () => window.removeEventListener('pageshow', onShow)
+  }, [])
 }
 
 /** A game (/g/CODE) is full screen with no app chrome; menus get the nav bar. */

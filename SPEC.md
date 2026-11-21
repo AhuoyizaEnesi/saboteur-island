@@ -2,7 +2,7 @@
 
 **This file is the source of truth.** Code follows this spec. If the build needs to change, this file changes first, and Peace approves the change.
 
-Status: **Approved in chat on Nov 19, 2026.** This is the sabotage version, with no killing.
+Status: **Approved in chat on Nov 19, 2026.**
 
 ---
 
@@ -290,17 +290,7 @@ Peace pushes to GitHub at the end of each step, about every 3 hours. I copy the 
 
 ---
 
-## 17. What changes from the current code
-
-**Keep:** the 3D renderer, models and islanders, placement rules, meeting, vote and ejection screens, role secrets, the builder agent, AI meeting dialogue, the lobby.
-
-**Change:** island size, the camera, timed build rounds become a night clock, orders happen at landmarks, the Impostor's secret item goal becomes wrecking tasks.
-
-**Remove:** the 3 build rounds and the Impostor's secret item themes.
-
----
-
-## 18. Writeup notes
+## 17. Writeup notes
 
 - **What we built:** one paragraph.
 - **Integrations:** the table in section 13, with the reasons for the ones left out.
@@ -308,6 +298,6 @@ Peace pushes to GitHub at the end of each step, about every 3 hours. I copy the 
 - **What the agent did:** which parts Claude wrote.
 - **What Peace verified:** the run sheet results and anything she changed.
 
-## 19. Out of scope
+## 18. Out of scope
 
 Killing, vents, more than one Impostor, settings menus, matchmaking with strangers, voice chat, mobile apps.

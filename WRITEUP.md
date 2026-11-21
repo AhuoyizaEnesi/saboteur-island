@@ -1,44 +1,49 @@
-# Saboteur Island: submission write-up (draft)
+# Saboteur Island
 
-Fill the bracketed parts after the live run sheet in SPEC.md section 15.
-
-**Live:** [URL]
+**Live:** https://saboteur-island.app.space
 **Repo:** https://github.com/AhuoyizaEnesi/saboteur-island
 
 ## What I built
 
-Saboteur Island is a multiplayer party game for 5 or 6 players. The crew walk around a floating 3D island and finish tasks before a 7 minute night clock runs out. Every task is done by writing your own prompt to an AI builder at a landmark. Each task is a request from someone on the island, like "put a bird up high where I can see it, the color of a lemon", and the player has to turn it into a clear prompt. The builder shows how it read every prompt, fills anything left out with its own plain defaults, and can be told to fix what it built, so the game teaches people to prompt clearly. One player is secretly the Impostor. They wreck finished tasks when nobody is near and cut the lights to hide. A wreck leaves smoke. Anyone who finds it can report it, and everyone meets, argues and votes. AI players fill empty seats, walk their own routes, do their tasks, report what they find, and argue in meetings from what they actually saw. One person can play a full game alone.
+Like Among Us, but every task is practice in prompting an AI.
 
-## DeepSpace integrations
+5 or 6 players fix up a floating 3D island before a 7 minute night clock runs out. One of them is a secret Impostor who wrecks finished work and cuts the lights. Every task is a request from an islander, written as a hint: "Put one up high where I can see it from my window, in the color of a lemon." The player has to turn that into a precise prompt for an AI builder. The builder shows how it read each prompt, fills gaps with plain defaults, and takes fixes like "make it yellow". A wreck leaves smoke, a report calls a meeting, and humans and AI players argue and vote. AI players fill empty seats, so one person can play a full game. Practice mode removes the Impostor and the clock so players can focus on their prompts.
 
-I used 6:
+## DeepSpace integrations (6)
 
-1. **Auth.** Every player is signed in, and every server action knows who is calling.
-2. **Records with live sync.** Games, players, builds, wrecked spots, votes and chat are records. Every screen draws from them.
-3. **Permissions.** Roles and task lists use `ownerField` with read `own`, so the server hides the Impostor, not the interface. Wreck clues are readable by no role at all.
-4. **Presence.** Live walking. Each browser broadcasts its position about 10 times a second.
-5. **Server actions.** Every write. Browsers have read only access to every game collection, and each action checks phase, role, distance and cooldowns.
-6. **AI.** The builder turns typed prompts into catalog objects, in build mode for the crew and wreck mode for the Impostor. In meetings, the model writes AI players' opening lines, replies to every human message, and decides AI votes from the whole chat and each AI player's private clues.
+- **Auth:** every server action knows who is calling.
+- **Records:** games, players, builds, votes and chat are live records that every screen draws from.
+- **Permissions:** roles and task lists use `ownerField` with read `own`. The server hides the Impostor, not the interface. Wreck clues are readable by no one.
+- **Presence:** live walking at about 10 updates a second, with nothing stored.
+- **Server actions:** every write. Browsers are read only, and each action checks phase, role, distance and cooldowns.
+- **AI:** the builder can only place catalog objects through tools, and it never sees the task, so it cannot leak the answer. In meetings, AI players argue from their own private clues and vote after the discussion.
 
-I left out cron because its 1 minute minimum is too slow for a 30 second vote; the host's browser calls `tick` every second instead. I left out messaging because meeting chat is short lived and belongs to the game. Nothing is edited together, so Yjs and canvas did not fit.
+I left out cron because its 1 minute minimum is too slow for a 30 second vote, so the host's browser runs the clock. Meeting chat lives with the game, so messaging was not needed. Nothing is edited together, so Yjs and canvas did not fit.
 
 ## Main tradeoff
 
-Vision and movement trust the browser more than a shooter would. Live positions travel over presence, which the server cannot read, so browsers also send a checkpoint every 1.5 seconds and the server clamps any move faster than walking speed. Vision is drawn in the browser, and positions sit in records every player can read, so a player inspecting raw data could see past their vision circle. A server streaming filtered state to each player would close that, but records have no per player filtering and it would mean building my own realtime layer. For a party game among friends I chose the platform primitives and wrote the limit down in ISSUES.md.
-
-Three smaller tradeoffs. AI players do their tasks with fixed builds instead of the model, which keeps cost to one model call per human order, plus a few per meeting: one to open it, one per human message (capped at 10), and one for votes. Every model call has a non AI fallback, so the game never stalls if the model is down. Model calls bill my account as the app owner, not the player, so anyone who signs in can play without credits of their own. A 4 second order cooldown, 4 objects per order and 220 objects per game cap what one player can spend.
+I chose platform primitives over a custom realtime server. Presence is fast but the server cannot read it, so browsers also send a checkpoint every 1.5 seconds and the server rejects any move faster than walking. Positions sit in records every player can read, so someone inspecting raw data could see past their vision circle. Closing that would mean building my own realtime layer. For a party game among friends, that cost was not worth it, and I logged the limit in ISSUES.md.
 
 ## What the agent did
 
-Claude wrote the code: the server actions, the schemas and permissions, the builder and meeting AI, the AI player routes, the three.js island, the game screen, the landing page and the tests. I directed the design and made the calls that shaped it: [list the decisions, for example: tasks done through the AI builder, sabotage instead of killing, walking kept with a vision circle, the night clock]. I set up the repo and the DeepSpace app, ran every CLI command, and played the game.
+Claude wrote the code and the tests. I directed it, tested every change, and changed course when the result was wrong:
+
+- I made players write their own prompts, with no autofill, so the game teaches prompting.
+- Playtests showed the AI Impostor wrecking too fast, so I made every wreck take at least half as long as a fix.
+- Nobody was ever ejected, so I had AI votes moved after the discussion and made them open to persuasion.
+- I asked for Practice mode to test prompting without the interruption of the gameplay.
+- The AI was the Impostor too often, so people now get the role more often, and a solo player can pick.
+- I rejected a cartoon restyle the agent built and kept the original look.
 
 ## What I verified
 
-- [ ] 44 unit tests pass, including whole games played through the real server actions with the model offline.
-- [ ] Solo game as crew against 4 AI players, played to an ending: [result]
-- [ ] Solo game as Impostor: [result]
-- [ ] Two browsers in one game: walking, a task, a wreck, a report, a vote, an ejection: [result]
-- [ ] Lights out and the fix at the Power Shed: [result]
-- [ ] Night falling ends the game: [result]
-- [ ] Phone: [result]
-- [ ] Changes I made after testing: [list]
+- 76 automated tests pass. 16 of them play whole games through the real server actions.
+- On the live site, "a lemon colored bird up high" was read as "a yellow bird", which proves the model runs in production. 63 model calls cost $0.02.
+- No secrets are in the repo. The model runs through the DeepSpace AI integration, billed to the app owner.
+- Two players on two continents: [result]
+- Solo as Crew and as Impostor: [result]
+
+## Unfinished and next
+
+- A browser runs the game clock, so if every player closes the tab, the game pauses until someone returns.
+- Next, I would spend more time on the prompts and the gameplay, so each prompt is something worth writing and building.
