@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth, usePresenceRoom } from 'deepspace'
-import { Bell, Ghost, Hammer, Link as LinkIcon, Megaphone, Moon, Paintbrush, SendHorizontal, Sun, Sunset, Trash2, Undo2, Volume2, VolumeX, Wrench, X, Zap } from 'lucide-react'
+import { Bell, Ghost, Hammer, Link as LinkIcon, LogOut, Megaphone, Moon, Paintbrush, Power, SendHorizontal, Sun, Sunset, Trash2, Undo2, Volume2, VolumeX, Wrench, X, Zap } from 'lucide-react'
 import { isMuted, play, setMuted, unlockSound } from '../sound'
 import { callAction, serverNow } from '../api'
 import {
@@ -25,6 +25,7 @@ import {
   TASK_RANGE,
   TICK_MS,
   VISION,
+  VOTE_GRACE_MS,
   WRECK_MS,
 } from '../constants'
 import { LANDMARKS, landmarkById, type Landmark } from '../landmarks'
@@ -66,6 +67,14 @@ export function GameScreen({ code }: { code: string }) {
   const [result, setResult] = useState<{ text: string; feedback: string[]; good: boolean } | null>(null)
   const [chatText, setChatText] = useState('')
   const [hideOver, setHideOver] = useState(false)
+  /** The leave / end menu, and which choice is waiting for its second click. */
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [confirming, setConfirming] = useState<'leave' | 'end' | null>(null)
+  useEffect(() => {
+    if (!confirming) return
+    const id = window.setTimeout(() => setConfirming(null), 4_000)
+    return () => window.clearTimeout(id)
+  }, [confirming])
   const [showOver, setShowOver] = useState(false)
   const [here, setHere] = useState<Pos | null>(null)
 
@@ -501,6 +510,24 @@ export function GameScreen({ code }: { code: string }) {
     flash(String(f.narration ?? 'Done.'), true)
     setOrderFor(null)
   }
+  const leave = async () => {
+    if (confirming !== 'leave') {
+      setConfirming('leave')
+      return
+    }
+    cancelJob()
+    await act('game-leave', {}, 'leave')
+    navigate('/play')
+  }
+  const endForAll = async () => {
+    if (confirming !== 'end') {
+      setConfirming('end')
+      return
+    }
+    await act('game-end', {}, 'end')
+    setMenuOpen(false)
+    setConfirming(null)
+  }
   const report = () => act('game-report', {}, 'report')
   const ringBell = () => act('game-bell', {}, 'bell')
   const fixLights = () => act('game-fix-lights', {}, 'fix')
@@ -542,14 +569,19 @@ export function GameScreen({ code }: { code: string }) {
   const fakeList = isImpostor && Array.isArray(mySecret?.data.fakeTasks) ? (mySecret?.data.fakeTasks as string[]) : []
   const wreckWait = mySecret ? Math.max(0, mySecret.data.wreckReadyAt - now) : 0
   const lightsWait = mySecret ? Math.max(0, mySecret.data.lightsReadyAt - now) : 0
-  const timeLeft = g ? g.phaseEndsAt - now : 0
   const meetingNo = g?.meetingNo ?? 0
   const visibleChat = chat.filter((c) => c.data.meetingNo === meetingNo && c.data.showAt <= now)
   // AI lines waiting to appear show as "typing", like a real chat.
   const typingIds = [...new Set(chat.filter((c) => c.data.meetingNo === meetingNo && c.data.showAt > now && c.data.showAt - now < 3_500).map((c) => c.data.playerId))]
   const meetingVotes = votes.filter((v) => v.data.meetingNo === meetingNo)
   const myVote = me ? meetingVotes.find((v) => v.data.voterId === me.id) : undefined
-  const votedIds = new Set(meetingVotes.filter((v) => v.data.showAt <= now).map((v) => v.data.voterId))
+  const shownVotes = meetingVotes.filter((v) => v.data.showAt <= now)
+  const votedIds = new Set(shownVotes.map((v) => v.data.voterId))
+  // Once every living player has voted, voting closes a few seconds after the last vote.
+  const livingIds = players.filter((p) => p.data.alive).map((p) => p.id)
+  const allVoted = phase === 'vote' && livingIds.length > 0 && livingIds.every((id) => votedIds.has(id))
+  const voteCloseAt = allVoted ? Math.max(...shownVotes.map((v) => v.data.showAt)) + VOTE_GRACE_MS : Infinity
+  const timeLeft = g ? Math.min(g.phaseEndsAt, voteCloseAt) - now : 0
   const chatEnd = useRef<HTMLDivElement>(null)
   useEffect(() => {
     chatEnd.current?.scrollIntoView({ block: 'end' })
@@ -626,9 +658,9 @@ export function GameScreen({ code }: { code: string }) {
               })}
             </div>
             <div className="si-row si-between si-mt">
-              <Link className="si-btn" to="/play">
-                Leave
-              </Link>
+              <button className="si-btn" disabled={busy === 'leave'} onClick={leave}>
+                <LogOut size={15} /> {confirming === 'leave' ? 'Click again to leave' : 'Leave'}
+              </button>
               {isHost ? (
                 <button className="si-btn primary big" disabled={busy === 'start'} onClick={() => act('game-start', {}, 'start')}>
                   {busy === 'start' ? 'Dealing roles...' : 'Start the game'}
@@ -662,7 +694,38 @@ export function GameScreen({ code }: { code: string }) {
       {g && phase !== 'lobby' && phase !== 'intro' && (
         <>
           <div className="si-hud-left">
-            <div className="si-title si-brand">SABOTEUR ISLAND</div>
+            <div className="si-row si-brandrow">
+              <div className="si-title si-brand">SABOTEUR ISLAND</div>
+              {phase !== 'over' && me && (
+                <button
+                  className="si-icon-btn"
+                  aria-label="Leave or end the game"
+                  aria-expanded={menuOpen}
+                  onClick={() => {
+                    setMenuOpen((o) => !o)
+                    setConfirming(null)
+                  }}
+                >
+                  <LogOut size={15} />
+                </button>
+              )}
+            </div>
+            {menuOpen && phase !== 'over' && me && (
+              <div className="si-card si-gamemenu">
+                <button className="si-btn" disabled={busy === 'leave'} onClick={leave}>
+                  <LogOut size={15} /> {confirming === 'leave' ? 'Click again to leave' : 'Leave game'}
+                </button>
+                <span className="si-small">An AI player takes over your islander.</span>
+                {isHost && (
+                  <>
+                    <button className="si-btn red si-mt-sm" disabled={busy === 'end'} onClick={endForAll}>
+                      <Power size={15} /> {confirming === 'end' ? 'Click again to end it for everyone' : 'End game for everyone'}
+                    </button>
+                    <span className="si-small">Nobody wins. Everyone sees who the Impostor was.</span>
+                  </>
+                )}
+              </div>
+            )}
             <div className={`si-card si-tasks-card ${isImpostor ? 'si-imp' : ''}`}>
               <div className="si-eyebrow">{isImpostor ? 'Fake tasks: pretend to do these' : ghost ? 'Your tasks (you are a ghost)' : 'Your tasks'}</div>
               {isImpostor
@@ -798,7 +861,7 @@ export function GameScreen({ code }: { code: string }) {
                   <Ghost size={13} /> You are a ghost. Finish your tasks to help the crew.
                 </>
               ) : (
-                'WASD or click to walk. Walk up to a landmark to work there.'
+                'WASD or click to walk. Drag to turn the camera. Walk up to a landmark to work there.'
               )}
             </div>
           )}
@@ -975,7 +1038,9 @@ export function GameScreen({ code }: { code: string }) {
           </div>
           {phase === 'vote' && (
             <div className="si-card">
-              <div className="si-eyebrow">{myVote ? 'You voted. You can change it until time runs out' : me && alive ? 'Who is the Impostor?' : 'Votes'}</div>
+              <div className="si-eyebrow">
+                {allVoted ? 'Everyone has voted. Closing now' : myVote ? 'You voted. You can change it until time runs out' : me && alive ? 'Who is the Impostor?' : 'Votes'}
+              </div>
               <div className="si-votes">
                 {players
                   .filter((p) => p.data.alive)
@@ -1008,9 +1073,20 @@ export function GameScreen({ code }: { code: string }) {
       {g && phase === 'over' && showOver && !hideOver && (
         <div className="si-overlay dim">
           <div className="si-panel">
-            <div className={`si-eyebrow ${g.winner === 'crew' ? 'good' : 'bad'}`}>{g.winner === 'crew' ? 'Crew wins' : 'Impostor wins'}</div>
-            <h2>{role ? ((g.winner === 'crew') === (role === 'crew') ? 'You won' : 'You lost') : g.winner === 'crew' ? 'The crew won' : 'The Impostor won'}</h2>
+            <div className={`si-eyebrow ${g.winner === 'crew' ? 'good' : g.winner ? 'bad' : ''}`}>{g.winner === 'crew' ? 'Crew wins' : g.winner ? 'Impostor wins' : 'Game ended'}</div>
+            <h2>
+              {!g.winner
+                ? 'No winner this time'
+                : role
+                  ? (g.winner === 'crew') === (role === 'crew')
+                    ? 'You won'
+                    : 'You lost'
+                  : g.winner === 'crew'
+                    ? 'The crew won'
+                    : 'The Impostor won'}
+            </h2>
             <p className="si-small">{g.winReason}</p>
+            {impostorId && (
             <div className="si-card si-imp si-mt">
               <div className="si-eyebrow">The Impostor was</div>
               <div className="si-row">
@@ -1021,6 +1097,7 @@ export function GameScreen({ code }: { code: string }) {
                 {g.reveal?.wrecks ? `They wrecked ${g.reveal.wrecks} finished ${g.reveal.wrecks === 1 ? 'task' : 'tasks'}.` : 'They never wrecked a finished task.'} The crew finished {g.tasksDone} of {g.tasksTotal} tasks.
               </div>
             </div>
+            )}
             {role === 'crew' && myTasks.length > 0 && (
               <div className="si-card si-mt-sm si-prompts">
                 <div className="si-eyebrow">Your prompts</div>

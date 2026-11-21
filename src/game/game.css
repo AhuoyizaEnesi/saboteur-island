@@ -346,3 +346,8 @@
   .si-tasks-card { max-width: 230px; }
 }
 .si-typing { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); padding: 4px 2px; }
+.si-brandrow { align-items: center; gap: 10px; }
+.si-brandrow .si-icon-btn { width: 30px; height: 30px; }
+.si-gamemenu { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 290px; }
+.si-gamemenu .si-btn { width: 100%; justify-content: center; }
+.si a.si-btn, .si-menu a.si-btn { text-decoration: none; }

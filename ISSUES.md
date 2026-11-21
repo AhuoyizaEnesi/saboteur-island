@@ -30,3 +30,9 @@ Peace's test feedback (Nov 20):
 - Nobody got ejected: AI votes were locked when the meeting opened and unsure crew always skipped. Now AI players vote after the whole discussion, follow a strong case, can be swayed during voting, and everyone can change their vote until time runs out.
 - Tasks were one short line. Now each names the place, the object, a color or count, and a reason.
 - The order box, lights banner and toasts were pushed off center by their slide in animation.
+
+Peace's test feedback (Nov 20, evening):
+- Ejected players could not move as ghosts. The ejection animation ran on frame time, so on a slow screen it was still playing when play resumed and the ghost never came back. It now runs on the clock and always ends as a ghost.
+- Voting waited out the full timer. It now closes 3 seconds after everyone has voted.
+- The camera angle was fixed. Dragging now turns it, and the movement keys follow the camera.
+- There was no way to leave or end a game. Added Leave (an AI takes over) and End game for the host.

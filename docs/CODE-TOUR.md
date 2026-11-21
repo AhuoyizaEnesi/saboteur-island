@@ -11,7 +11,7 @@ A map of how the game works, for reading or changing the code. Rules are in [SPE
 
 ## Five flows, step by step
 
-**1. Walking.** Keys move your islander inside `IslandScene` (`updateCharacters`). Every move calls `onMyMove`. `GameScreen` broadcasts the position over presence about 10 times a second, so other browsers can draw you, and sends `game-pos` every 1.5 seconds so the server knows where you are. The server clamps any jump faster than walking speed (`legalMove`).
+**1. Walking.** Keys move your islander inside `IslandScene` (`updateCharacters`), relative to the camera angle (`followYaw`, turned by dragging in `onPointerMove`). Every move calls `onMyMove`. `GameScreen` broadcasts the position over presence about 10 times a second, so other browsers can draw you, and sends `game-pos` every 1.5 seconds so the server knows where you are. The server clamps any jump faster than walking speed (`legalMove`).
 
 **2. Doing a task.** Walk near a landmark and press E. The order box shows your task here but starts empty: you write the prompt. A build is two calls, 8 seconds apart (`BUILD_MS`).
 
@@ -33,7 +33,9 @@ A map of how the game works, for reading or changing the code. Rules are in [SPE
 **4. Meetings.** `game-report` (near smoke) or `game-bell` (at the bell) calls `startMeeting`. It pauses the night clock, seats everyone, and asks `planMeeting` (`src/server/meeting-ai.ts`) for a few opening lines between the AI players. Each AI player only knows its own notes (`notesFor`): where it was, who was with it, what it saw. The AI Impostor gets a fake alibi.
 - Every human message (`game-chat`, `sendChat`) gets 1 or 2 replies from `replyInMeeting`. The AI player you name, or the last one who spoke if you say "you", always answers. Capped at `MAX_REPLY_CALLS` per meeting.
 - When voting opens, `startVote` asks `planVotes` for every AI vote after reading the whole chat. Eyewitnesses are firm; everyone else votes slowly and can be swayed by a human message during voting.
-- Anyone can change their vote until the timer ends (`castVote` updates the same row). `tick` moves meeting to vote to eject, `resolveVote` counts with `tally`, and `afterEject` either ends the game or restarts the clock.
+- Anyone can change their vote until voting closes (`castVote` updates the same row). Voting closes at the timer, or `VOTE_GRACE_MS` after the last living player's vote appears (`allVotedAt` in `tick`). `tick` moves meeting to vote to eject, `resolveVote` counts with `tally`, and `afterEject` either ends the game or restarts the clock.
+
+**Leaving and ending.** `game-leave` frees a lobby seat, or turns your islander into an AI player mid game (same role and tasks, private rows moved to the AI) and passes the host on. `game-end` is host only and ends with no winner.
 
 **5. The clock and AI players.** One browser calls `game-tick` every second (`GameScreen`, "the clock"). `tick` advances phases, checks nightfall, and calls `runBots`. Each AI player has a route of timed legs (`src/game/bots.ts`). Every browser draws the same legs from the shared clock, so AI players need no streaming. When a leg ends, `runBots` finishes the job (places a task build, wrecks, fixes the lights) and plans the next walk.
 

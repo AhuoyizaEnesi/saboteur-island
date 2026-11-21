@@ -109,6 +109,7 @@ interface Character {
   heading: number
   ejecting: boolean
   ejectT: number
+  ejectStart: number
   ejectV: THREE.Vector3
   gone: boolean
   /** Position supplied by presence for another human; overrides wandering. */
@@ -235,7 +236,9 @@ export class IslandScene {
   private landmarkLabels: { obj: CSS2DObject; x: number; z: number }[] = []
   private shedPanel: THREE.MeshStandardMaterial | null = null
   private raycaster = new THREE.Raycaster()
-  private pointerDown: { x: number; y: number; t: number } | null = null
+  private pointerDown: { x: number; y: number; t: number; yaw: number; dragging: boolean } | null = null
+  /** Follow camera angle around the player, turned by dragging. 0 looks north from the south. */
+  private followYaw = 0
   private lastInteract = 0
   private tmpV = new THREE.Vector3()
 
@@ -349,7 +352,10 @@ export class IslandScene {
 
     const el = this.renderer.domElement
     el.addEventListener('pointerdown', this.onPointerDown)
+    el.addEventListener('pointermove', this.onPointerMove)
     el.addEventListener('pointerup', this.onPointerUp)
+    el.addEventListener('pointercancel', this.onPointerCancel)
+    el.style.touchAction = 'none'
     el.addEventListener('wheel', this.onWheel, { passive: true })
     window.addEventListener('resize', this.onResize)
     window.addEventListener('keydown', this.onKeyDown)
@@ -426,14 +432,9 @@ export class IslandScene {
       if (existing) {
         existing.player = p
         existing.labelDiv.textContent = p.isMe ? `${p.name} (you)` : p.name
-        if (p.ghost && !existing.ghost && !existing.ejecting) {
-          existing.gone = false
-          existing.model.root.visible = true
-          existing.label.visible = true
-          existing.model.root.scale.setScalar(1)
-          existing.model.root.rotation.set(0, existing.heading, 0)
-          existing.labelDiv.style.opacity = '1'
-          this.makeGhost(existing)
+        if (p.ghost && !existing.ghost) {
+          // Back as a ghost, even if the ejection is still flying on a slow screen.
+          this.reviveAsGhost(existing)
         } else if (!p.alive && !p.ghost && !existing.ejecting && !existing.gone) {
           existing.gone = true
           existing.model.root.visible = false
@@ -456,7 +457,7 @@ export class IslandScene {
       this.island.add(model.root)
       const c: Character = {
         player: p, model, label, labelDiv: div, pos: start, target: null, home, nextWander: this.elapsed + rand(1, 4),
-        walkPhase: rand(0, 6), heading: rand(0, Math.PI * 2), ejecting: false, ejectT: 0, ejectV: new THREE.Vector3(),
+        walkPhase: rand(0, 6), heading: rand(0, Math.PI * 2), ejecting: false, ejectT: 0, ejectStart: 0, ejectV: new THREE.Vector3(),
         gone: !p.alive && !p.ghost, remote: null, busyUntil: 0, route: this.routeMap[p.id] ?? null, ghost: false,
       }
       if (!p.alive && !p.ghost) {
@@ -637,6 +638,7 @@ export class IslandScene {
     if (!c || c.ejecting) return
     c.ejecting = true
     c.ejectT = 0
+    c.ejectStart = performance.now()
     const dir = new THREE.Vector3(c.pos.x, 0, c.pos.y)
     if (dir.lengthSq() < 0.01) dir.set(1, 0, 0)
     dir.normalize()
@@ -722,7 +724,9 @@ export class IslandScene {
     window.removeEventListener('keyup', this.onKeyUp)
     window.removeEventListener('blur', this.onBlur)
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown)
+    this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove)
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp)
+    this.renderer.domElement.removeEventListener('pointercancel', this.onPointerCancel)
     this.renderer.domElement.removeEventListener('wheel', this.onWheel)
     for (const l of this.landmarkLabels) l.obj.element.remove()
     this.controls.dispose()
@@ -771,6 +775,18 @@ export class IslandScene {
     const a = (seat / 6) * Math.PI * 2 + 2.3
     const p = new THREE.Vector2(MEETING_SPOT.x + Math.cos(a) * 2.2, MEETING_SPOT.z + Math.sin(a) * 2.2)
     return this.clampWalkable(p.x, p.y)
+  }
+
+  private reviveAsGhost(c: Character) {
+    c.ejecting = false
+    c.gone = false
+    c.target = null
+    c.model.root.visible = true
+    c.label.visible = true
+    c.model.root.scale.setScalar(1)
+    c.model.root.rotation.set(0, c.heading, 0)
+    c.labelDiv.style.opacity = '1'
+    if (!c.ghost) this.makeGhost(c)
   }
 
   private makeGhost(c: Character) {
@@ -1300,14 +1316,32 @@ export class IslandScene {
   // ─── input ─────────────────────────────────────────────────────────────────
 
   private onPointerDown = (e: PointerEvent) => {
-    this.pointerDown = { x: e.clientX, y: e.clientY, t: performance.now() }
+    this.pointerDown = { x: e.clientX, y: e.clientY, t: performance.now(), yaw: this.followYaw, dragging: false }
+  }
+
+  /** Dragging turns the follow camera around the player; a click without a drag still walks. */
+  private onPointerMove = (e: PointerEvent) => {
+    const d = this.pointerDown
+    if (!d || this.camMode !== 'follow' || this.meeting) return
+    const dx = e.clientX - d.x
+    if (!d.dragging && Math.abs(dx) < 6) return
+    if (!d.dragging) {
+      d.dragging = true
+      this.renderer.domElement.setPointerCapture?.(e.pointerId)
+    }
+    const w = this.container.clientWidth || window.innerWidth
+    this.followYaw = d.yaw - (dx / w) * Math.PI * 1.6
+  }
+
+  private onPointerCancel = () => {
+    this.pointerDown = null
   }
 
   private onPointerUp = (e: PointerEvent) => {
     const d = this.pointerDown
     this.pointerDown = null
     if (!d) return
-    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6 || performance.now() - d.t > 500) return
+    if (d.dragging || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6 || performance.now() - d.t > 500) return
     const rect = this.renderer.domElement.getBoundingClientRect()
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1)
     this.raycaster.setFromCamera(ndc, this.camera)
@@ -1360,7 +1394,7 @@ export class IslandScene {
     const focus = this.island.localToWorld(this.tmpV.set(me.pos.x, ground + 0.35, me.pos.y)).clone()
     // Narrow portrait screens see less sideways, so the camera pulls back.
     const z = this.followZoom * (this.camera.aspect < 0.8 ? 1.55 : 1)
-    const want = focus.clone().add(new THREE.Vector3(0, 4.9 * z, 5.3 * z))
+    const want = focus.clone().add(new THREE.Vector3(Math.sin(this.followYaw) * 5.3 * z, 4.9 * z, Math.cos(this.followYaw) * 5.3 * z))
     const k = Math.min(1, dt * 5)
     this.camera.position.lerp(want, k)
     this.controls.target.lerp(focus, k)
@@ -1661,7 +1695,8 @@ export class IslandScene {
     for (const c of this.characters.values()) {
       const m = c.model
       if (c.ejecting) {
-        c.ejectT += dt
+        // Wall clock, not frame time, so a slow screen does not stretch the flight past the eject phase.
+        c.ejectT = (performance.now() - c.ejectStart) / 1000
         c.ejectV.multiplyScalar(1 + dt * 0.4)
         m.root.position.addScaledVector(c.ejectV, dt)
         m.root.rotation.x += dt * 2.2
@@ -1669,9 +1704,12 @@ export class IslandScene {
         m.root.scale.setScalar(Math.max(0.01, 1 - c.ejectT * 0.12))
         c.labelDiv.style.opacity = String(Math.max(0, 1 - c.ejectT * 0.5))
         if (c.ejectT > 6) {
-          c.ejecting = false
-          c.gone = true
-          m.root.visible = false
+          if (c.player.ghost) this.reviveAsGhost(c)
+          else {
+            c.ejecting = false
+            c.gone = true
+            m.root.visible = false
+          }
         }
         continue
       }
@@ -1706,6 +1744,15 @@ export class IslandScene {
             iz += v[1]
           }
         }
+      }
+      if ((ix || iz) && this.camMode === 'follow' && this.followYaw) {
+        // Keys move relative to the camera, so W always walks away from you.
+        const cy = Math.cos(this.followYaw)
+        const sy = Math.sin(this.followYaw)
+        const rx = ix * cy + iz * sy
+        const rz = -ix * sy + iz * cy
+        ix = rx
+        iz = rz
       }
       if (ix || iz) {
         c.target = null
@@ -1787,11 +1834,15 @@ export class IslandScene {
     if (me && this.visionR !== null && this.camMode === 'follow' && !this.meeting) {
       const ground = terrainH(me.pos.x, me.pos.y) + 0.3
       const c = this.island.localToWorld(new THREE.Vector3(me.pos.x, ground, me.pos.y)).project(this.camera)
-      const ex = this.island.localToWorld(new THREE.Vector3(me.pos.x + this.visionR, ground, me.pos.y)).project(this.camera)
-      const ez = this.island.localToWorld(new THREE.Vector3(me.pos.x, ground, me.pos.y - this.visionR)).project(this.camera)
+      // Measure along the camera's own right and forward directions, so turning the camera keeps the circle right.
+      const cyaw = Math.cos(this.followYaw)
+      const syaw = Math.sin(this.followYaw)
+      const R = this.visionR
+      const ex = this.island.localToWorld(new THREE.Vector3(me.pos.x + cyaw * R, ground, me.pos.y - syaw * R)).project(this.camera)
+      const ez = this.island.localToWorld(new THREE.Vector3(me.pos.x - syaw * R, ground, me.pos.y - cyaw * R)).project(this.camera)
       cx = ((c.x + 1) / 2) * w
       cy = ((1 - c.y) / 2) * h
-      rx = Math.abs(((ex.x + 1) / 2) * w - cx)
+      rx = Math.hypot(((ex.x + 1) / 2) * w - cx, ((1 - ex.y) / 2) * h - cy)
       ry = Math.abs(((1 - ez.y) / 2) * h - cy)
     }
     const k = Math.min(1, dt * 4)

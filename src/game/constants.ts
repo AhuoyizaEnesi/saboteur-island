@@ -12,6 +12,8 @@ export const INTRO_MS = 7_000
 export const PLAY_MS = 7 * 60_000
 export const MEETING_MS = 60_000
 export const VOTE_MS = 30_000
+/** Once every living player has voted, voting closes this long after the last vote. */
+export const VOTE_GRACE_MS = 3_000
 export const EJECT_MS = 9_000
 /** How often the ticking browser advances the game. */
 export const TICK_MS = 1_000

@@ -27,6 +27,7 @@ import {
   JOB_EXPIRES_MS,
   JOB_SLACK_MS,
   MAX_REPLY_CALLS,
+  VOTE_GRACE_MS,
   WRECK_MS,
   BELLS_PER_PLAYER,
   BOT_NAMES,
@@ -601,6 +602,15 @@ async function startVote(env: Env, tools: ActionTools, game: Row<GameRow>) {
   }
 }
 
+/** When the last living player's vote appeared, or Infinity while anyone has not voted. */
+async function allVotedAt(tools: ActionTools, game: Row<GameRow>): Promise<number> {
+  const t = Date.now()
+  const players = (await loadPlayers(tools, game.id)).filter((p) => p.data.alive)
+  const votes = (await query<VoteRow>(tools, 'votes', { gameId: game.id, meetingNo: game.data.meetingNo })).filter((v) => v.data.showAt <= t)
+  if (!players.length || !players.every((p) => votes.some((v) => v.data.voterId === p.id))) return Infinity
+  return Math.max(...votes.map((v) => v.data.showAt))
+}
+
 async function resolveVote(tools: ActionTools, game: Row<GameRow>) {
   const t = Date.now()
   const players = await loadPlayers(tools, game.id)
@@ -817,7 +827,7 @@ async function tick({ env, params, tools }: Ctx): Promise<ActionResult> {
     await runBots(env, tools, game, t)
   } else if (phase === 'meeting' && t >= game.data.phaseEndsAt) {
     await startVote(env, tools, game)
-  } else if (phase === 'vote' && t >= game.data.phaseEndsAt) {
+  } else if (phase === 'vote' && (t >= game.data.phaseEndsAt || (await allVotedAt(tools, game)) + VOTE_GRACE_MS <= t)) {
     await resolveVote(tools, game)
   } else if (phase === 'eject' && t >= game.data.phaseEndsAt) {
     await afterEject(tools, game)
@@ -1141,6 +1151,68 @@ async function rematch(ctx: Ctx): Promise<ActionResult> {
   return ok({ code })
 }
 
+// ─── actions: leaving and ending ─────────────────────────────────────────────
+
+/** The next human to host when the host leaves: lowest seat first. */
+function nextHost(players: Row<PlayerRow>[], leaving: string): string | null {
+  const humans = players.filter((p) => !p.data.isBot && p.data.userId !== leaving).sort((a, b) => a.data.seat - b.data.seat)
+  return humans[0]?.data.userId ?? null
+}
+
+/**
+ * Leave a game. In the lobby the seat frees up. Once the game is on, an AI
+ * player takes over the islander, with the same role and tasks, so the game
+ * keeps working for everyone else.
+ */
+async function leaveGame({ userId, params, tools }: Ctx): Promise<ActionResult> {
+  const game = await loadGame(tools, params.gameId)
+  if (!game) return fail('Game not found.')
+  const players = await loadPlayers(tools, game.id)
+  const me = players.find((p) => p.data.userId === userId)
+  if (!me) return ok({ left: true })
+  const host = game.data.hostId === userId ? nextHost(players, userId) : null
+  if (host) await patchGame(tools, game.id, { hostId: host })
+  if (game.data.phase === 'over') return ok({ left: true })
+  if (game.data.phase === 'lobby') {
+    await must(tools.remove('players', me.id))
+    return ok({ left: true })
+  }
+  const botUser = `bot:left:${me.id}`
+  await must(tools.update('players', me.id, { isBot: 1, userId: botUser }))
+  // The AI's private rows move with the islander, so the person who left no longer reads them.
+  for (const s of await query<SecretRow>(tools, 'secrets', { gameId: game.id, playerId: me.id }, 5)) {
+    await must(tools.update('secrets', s.id, { ownerUserId: botUser, pending: null }))
+  }
+  for (const t of (await loadTasks(tools, game.id)).filter((x) => x.data.playerId === me.id)) {
+    await must(tools.update('tasks', t.id, { ownerUserId: botUser }))
+  }
+  // Start the AI from where the person was standing.
+  const t = Date.now()
+  const here = me.data.posAt ? { x: Number(me.data.x), z: Number(me.data.z) } : seatSpot(me.data.seat)
+  const hold = game.data.phase === 'play' ? 1_000 : Math.max(1_000, game.data.phaseEndsAt - t + VOTE_MS + EJECT_MS)
+  const route = (await loadRoutes(tools, game.id)).find((r) => r.data.playerId === me.id)
+  await setRoute(tools, game.id, me.id, [stayLeg(here, t, hold, 'wait')], 'wander', route?.id)
+  await event(tools, game.id, 'system', `${me.data.name} left. An AI player took over.`, me.id)
+  return ok({ left: true })
+}
+
+/** The host ends the game for everyone. Nobody wins; the Impostor is revealed. */
+async function endGame({ userId, params, tools }: Ctx): Promise<ActionResult> {
+  const game = await loadGame(tools, params.gameId)
+  if (!game) return fail('Game not found.')
+  if (game.data.hostId !== userId) return fail('Only the host can end the game.', 'forbidden')
+  if (game.data.phase === 'over') return ok({ ended: true })
+  const secrets = await loadSecrets(tools, game.id)
+  const impostorId = secrets.find((s) => s.data.role === 'impostor')?.data.playerId ?? ''
+  const wrecks = (await query<ClueRow>(tools, 'clues', { gameId: game.id }, 100)).length
+  await patchGame(tools, game.id, {
+    phase: 'over', phaseEndsAt: 0, winner: '', winReason: 'The host ended the game.', lightsOutUntil: 0,
+    reveal: { impostorPlayerId: impostorId, wrecks },
+  })
+  await event(tools, game.id, 'system', 'The host ended the game.')
+  return ok({ ended: true })
+}
+
 function guard(fn: (ctx: Ctx) => Promise<ActionResult>): ActionHandler<Env> {
   return async (ctx) => {
     try {
@@ -1169,4 +1241,6 @@ export const gameActions: Record<string, ActionHandler<Env>> = {
   'game-chat': guard(sendChat),
   'game-vote': guard(castVote),
   'game-rematch': guard(rematch),
+  'game-leave': guard(leaveGame),
+  'game-end': guard(endGame),
 }

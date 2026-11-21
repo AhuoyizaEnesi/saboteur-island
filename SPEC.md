@@ -83,7 +83,7 @@ The Impostor's builder can knock over, recolor and remove objects. The crew's bu
 - **A broken task** shows smoke and rubble at its spot. Anyone close enough sees it. The owner's task list shows that task as broken, so they know to go back and redo it. Everyone else only sees the task bar drop.
 - **Report:** a living player within 2.5 units of a broken spot can report it. That starts a meeting. A spot can only be reported once.
 - **Bell:** a living player at the center can ring the bell. Each player gets 1 ring. The bell is locked for 15 seconds after every meeting.
-- **Meeting:** everyone is moved to seats around the bell. 60 seconds of chat, then 30 seconds of voting. Chat stays open while voting. Each living player votes for someone or skips, and anyone can change their vote until the timer ends, so a good argument can still swing it. The night clock pauses during meetings.
+- **Meeting:** everyone is moved to seats around the bell. 60 seconds of chat, then 30 seconds of voting. Chat stays open while voting. Each living player votes for someone or skips, and anyone can change their vote until voting closes, so a good argument can still swing it. Voting closes when the timer ends, or 3 seconds after the last living player's vote appears. The night clock pauses during meetings.
 - **Result:** the player with the most votes is ejected. A tie, or a skip winning, ejects nobody. The ejected player floats off into space while a line types out whether they were the Impostor.
 - **Ghosts:** ejected crew become ghosts. They float, can still do their own tasks, and are invisible to the living. They cannot chat, vote, report or ring the bell.
 
@@ -157,12 +157,13 @@ These get tuned during testing.
 | Lobby | Follow view so players can walk while they wait. A side panel with the code, an invite link, 6 seats, and Start for the host |
 | Role reveal | Crew or Impostor in large type, with the goal in one line |
 | Play | Follow camera. Top left: task list and task bar. Top right: night clock, a small island map (your position and your task landmarks, never other players), and the player list. Bottom right: action buttons that light up in range (Build, Report, Fix lights, Bell). Top center: alerts |
+| Game menu | A button beside the title. Leave game for anyone: in the lobby the seat frees up; during a game an AI player takes over your islander with the same role and tasks, and the host role passes to the next human. End game for the host only: nobody wins and everyone sees the Impostor. Both need a second click |
 | Order box | Opens at a landmark. Shows your task there with its details and reason, an empty prompt field and a Build button. While building, a progress ring. After a miss, one line on what the prompt left out. The Impostor also sees the wreck buttons |
 | Meeting | Chat on one side with a typing indicator for AI players, islanders seated around the bell, then the vote grid. Chat stays open while voting, and votes can be changed until time runs out |
 | Ejection | Space background, the islander drifting away, the result typing out |
 | End | Who won and why, who the Impostor was, how many of your tasks you finished on the first prompt, Play again |
 
-Controls: WASD or arrow keys, or click the ground to walk. E opens the order box, R reports. Every action also has a button for mouse and touch.
+Controls: WASD or arrow keys, or click the ground to walk. Drag to turn the camera around you; movement keys follow the camera, so W walks away from you. Scroll to zoom. E opens the order box, R reports. Every action also has a button for mouse and touch.
 
 ---
 

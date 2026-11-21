@@ -12,7 +12,7 @@ import { landmarkById } from '../game/landmarks'
 import { makeRng } from '../game/placement'
 import { assignRoles } from '../game/rules'
 import { taskTemplate } from '../game/tasks'
-import { BUILD_MS, INTRO_MS, MEETING_MS, VOTE_MS, EJECT_MS, PLAY_MS, WRECK_MS } from '../game/constants'
+import { BUILD_MS, INTRO_MS, MEETING_MS, VOTE_GRACE_MS, VOTE_MS, EJECT_MS, PLAY_MS, WRECK_MS } from '../game/constants'
 
 type Rec = { recordId: string; data: Record<string, unknown>; createdAt: string }
 
@@ -361,5 +361,65 @@ describe('a full game through the server actions', () => {
     // Every AI player has a vote, and chat still works.
     expect(rowsOf(t, 'votes', { gameId }).length).toBe(players.filter((p) => p.data.isBot).length)
     expect((await call(t.tools, 'game-chat', 'u1', { gameId, text: 'vote whoever you think it is' })).success).toBe(true)
+  })
+
+  it('voting closes a few seconds after everyone has voted', async () => {
+    const { t, gameId, players } = await setup(3)
+    advance(12_000)
+    await walk(t, gameId, 'u1', { x: 1.2, z: 0.6 })
+    expect((await call(t.tools, 'game-bell', 'u1', { gameId })).success).toBe(true)
+    advance(MEETING_MS + 100)
+    await call(t.tools, 'game-tick', 'u1', { gameId })
+    expect(rowsOf(t, 'games')[0].data.phase).toBe('vote')
+    await call(t.tools, 'game-vote', 'u1', { gameId, targetId: 'skip' })
+    // Not everyone has voted yet: u2 is missing, so a tick keeps voting open.
+    advance(1_000)
+    await call(t.tools, 'game-tick', 'u1', { gameId })
+    expect(rowsOf(t, 'games')[0].data.phase).toBe('vote')
+    await call(t.tools, 'game-vote', 'u2', { gameId, targetId: 'skip' })
+    // AI votes appear within 20 seconds; once all are in, it closes after the grace period, well before 30 seconds.
+    for (const v of rowsOf(t, 'votes', { gameId })) await t.tools.update('votes', v.recordId, { showAt: Date.now() })
+    advance(VOTE_GRACE_MS - 1_000)
+    await call(t.tools, 'game-tick', 'u1', { gameId })
+    expect(rowsOf(t, 'games')[0].data.phase).toBe('vote')
+    advance(1_500)
+    await call(t.tools, 'game-tick', 'u1', { gameId })
+    expect(rowsOf(t, 'games')[0].data.phase).toBe('eject')
+    expect(players.length).toBe(5)
+  })
+
+  it('leaving mid game hands the islander to an AI and passes on the host; the host can end the game', async () => {
+    const { t, gameId, players } = await setup(1)
+    const host = players[0]
+    expect((await call(t.tools, 'game-end', 'u2', { gameId })).error).toMatch(/Only the host/)
+    expect((await call(t.tools, 'game-leave', 'u1', { gameId })).success).toBe(true)
+    const after = rowsOf(t, 'players', { gameId }).find((p) => p.recordId === host.recordId)!
+    expect(after.data.isBot).toBe(1)
+    expect(String(after.data.userId)).toMatch(/^bot:left:/)
+    expect(rowsOf(t, 'games')[0].data.hostId).toBe('u2')
+    // The old owner no longer owns the private rows.
+    expect(rowsOf(t, 'secrets', { gameId, playerId: host.recordId })[0].data.ownerUserId).toBe(after.data.userId)
+    // The AI that took over keeps playing.
+    for (let i = 0; i < 30; i++) {
+      advance(1000)
+      expect((await call(t.tools, 'game-tick', 'u2', { gameId })).success).toBe(true)
+    }
+    expect(rowsOf(t, 'routes', { gameId, playerId: host.recordId }).length).toBe(1)
+    // The new host ends it for everyone.
+    expect((await call(t.tools, 'game-end', 'u2', { gameId })).success).toBe(true)
+    const g = rowsOf(t, 'games')[0].data
+    expect(g.phase).toBe('over')
+    expect(g.winner).toBe('')
+    expect((g.reveal as { impostorPlayerId: string }).impostorPlayerId).toBe(players[1].recordId)
+  })
+
+  it('leaving the lobby frees the seat', async () => {
+    const t = fakeTools()
+    const created = await call(t.tools, 'game-create', 'u1')
+    const { gameId, code } = created.data as { gameId: string; code: string }
+    await call(t.tools, 'game-join', 'u2', { code })
+    expect(rowsOf(t, 'players', { gameId })).toHaveLength(2)
+    expect((await call(t.tools, 'game-leave', 'u2', { gameId })).success).toBe(true)
+    expect(rowsOf(t, 'players', { gameId })).toHaveLength(1)
   })
 })
