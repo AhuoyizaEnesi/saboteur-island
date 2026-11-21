@@ -17,7 +17,7 @@ import { audioContext, isMuted } from './sound'
 export type MusicLevel = 'off' | 'low' | 'full'
 
 const SRC = '/audio/afro-beat.mp3'
-const GAIN: Record<MusicLevel, number> = { off: 0, low: 0.12, full: 0.4 }
+const GAIN: Record<MusicLevel, number> = { off: 0, low: 0.08, full: 0.25 }
 const FADE_S = 0.9
 
 let level: MusicLevel = 'full'
