@@ -379,3 +379,7 @@
   .si-sound-btn { left: auto; bottom: auto; top: 92px; right: 10px; width: 36px; height: 36px; }
   .phase-lobby .si-sound-btn, .phase-intro .si-sound-btn { top: auto; right: auto; left: 10px; bottom: 12px; }
 }
+/* The same button on pages outside a game (landing, menu, settings) */
+.si-sound-btn.global { position: fixed; left: auto; top: auto; right: 18px; bottom: 18px; z-index: 50; border-color: rgba(255, 255, 255, 0.14); background: rgba(16, 13, 40, 0.72); color: #ece9ff; }
+.si-sound-btn.global[aria-pressed='true'] { color: #a9a3d6; }
+@media (max-width: 720px) { .si-sound-btn.global { right: 12px; bottom: 12px; } }

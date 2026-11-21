@@ -60,7 +60,7 @@ On Windows PowerShell, run the stress tests with `$env:STRESS=1; npm run test:un
 
 Built with React 19, three.js, Vite, the DeepSpace SDK 0.44.2, and the Vercel AI SDK with a Claude Haiku model.
 
-Music: ["Afro Beat - Instrumental Music"](https://pixabay.com/music/afrobeat-afro-beat-instrumental-music-554537/) by rediskasound on Pixabay, used under the Pixabay Content License. It plays quietly during the round and drops lower during meetings.
+Music: ["Afro Beat - Instrumental Music"](https://pixabay.com/music/afrobeat-afro-beat-instrumental-music-554537/) by rediskasound on Pixabay, used under the Pixabay Content License. It plays on every page after the first click and drops lower during meetings.
 
 ### DeepSpace integrations
 

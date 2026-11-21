@@ -254,7 +254,7 @@ A floating island at dusk in deep space, turning to night as the clock runs down
 - **Motion:** smooth camera moves and pop in builds. Everything checks `prefers-reduced-motion`.
 - **No emoji** anywhere in the interface. Icons come from lucide.
 - **Sound:** small synthesized effects (bell, task done, wreck, lights out, ejection), silent until the first click, with a mute button.
-- **Music:** one looping Afrobeat instrumental under the round (not the lobby). It plays quietly during play, drops lower during meetings, votes and ejections, fades instead of cutting, stops while the tab is hidden, and follows the same mute button. Track: "Afro Beat - Instrumental Music" by rediskasound on Pixabay, under the Pixabay Content License.
+- **Music:** one looping Afrobeat instrumental on every page after the first click. It drops lower during meetings, votes and ejections, fades instead of cutting, stops while the tab is hidden, and follows the same mute button. Track: "Afro Beat - Instrumental Music" by rediskasound on Pixabay, under the Pixabay Content License.
 
 ---
 

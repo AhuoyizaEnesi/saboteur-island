@@ -26,4 +26,4 @@ Playtests with friends led to these changes.
 - **Building takes time.** A build takes 8 seconds and a wreck 4, standing at the landmark. Walking away cancels both.
 - **Leave and end.** Leaving hands your seat to an AI player, and the host can end the game.
 - **A camera you can turn.** Drag to turn it, and the movement keys follow.
-- **Music and one mute button.** An Afrobeat instrumental plays quietly under the round and drops lower during meetings. One button on every screen mutes it with the sound effects.
+- **Music and one mute button.** An Afrobeat instrumental plays on every page and drops lower during meetings. One button on every page mutes it with the sound effects.

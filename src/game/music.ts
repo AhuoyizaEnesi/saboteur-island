@@ -1,7 +1,7 @@
 /**
- * Background music: one looping track under the round. It plays at a low
- * level during play and drops lower during meetings, votes and ejections so
- * people can read and talk. The mute button silences it with the effects.
+ * Background music: one looping track on every page after the first click.
+ * It drops lower during meetings, votes and ejections so people can read
+ * and talk. The mute button silences it with the effects.
  *
  * The track runs through the same Web Audio context as the effects, so the
  * level works on phones too (iOS ignores an audio element's volume). Nothing
@@ -17,10 +17,10 @@ import { audioContext, isMuted } from './sound'
 export type MusicLevel = 'off' | 'low' | 'full'
 
 const SRC = '/audio/afro-beat.mp3'
-const GAIN: Record<MusicLevel, number> = { off: 0, low: 0.05, full: 0.2 }
+const GAIN: Record<MusicLevel, number> = { off: 0, low: 0.12, full: 0.4 }
 const FADE_S = 0.9
 
-let level: MusicLevel = 'off'
+let level: MusicLevel = 'full'
 let el: HTMLAudioElement | null = null
 let gain: GainNode | null = null
 let primed = false

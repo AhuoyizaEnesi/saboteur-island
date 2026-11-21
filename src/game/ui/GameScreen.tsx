@@ -112,11 +112,11 @@ export function GameScreen({ code }: { code: string }) {
     }
   }, [])
 
-  // Music under the round: quiet during play, quieter while people talk.
+  // Music drops lower while people talk in meetings.
   useEffect(() => {
-    setMusicLevel(phase === 'lobby' ? 'off' : phase === 'meeting' || phase === 'vote' || phase === 'eject' ? 'low' : 'full')
+    setMusicLevel(phase === 'meeting' || phase === 'vote' || phase === 'eject' ? 'low' : 'full')
   }, [phase])
-  useEffect(() => () => setMusicLevel('off'), [])
+  useEffect(() => () => setMusicLevel('full'), [])
 
   const flash = useCallback((text: string, good = false) => {
     setToast({ text, good })
