@@ -453,3 +453,21 @@ describe('meeting replies', () => {
     expect(chatBefore(chat.slice(0, 2), { playerId: 'c', text: 'hi' })).toEqual(chat.slice(0, 2))
   })
 })
+
+describe('meeting notes', () => {
+  it('tell every AI player a real place even before anything is wrecked', () => {
+    const input: MeetingInput = {
+      players: [
+        { id: 'a', name: 'Ada', isBot: true, alive: true, isImpostor: false },
+        { id: 'r', name: 'Rex', isBot: true, alive: true, isImpostor: true },
+        { id: 'h', name: 'Peace', isBot: false, alive: true, isImpostor: false },
+      ],
+      clues: [], callerName: 'Peace', reason: 'bell', where: '', rng: makeRng(1), workedAt: { a: 'Orchard', r: 'Dock' },
+    }
+    expect(notesFor(input.players[0], input).lines.join(' ')).toContain('at the Orchard')
+    expect(notesFor(input.players[1], input).lines.join(' ')).toContain('at the Dock')
+    const names = LANDMARKS.map((l) => l.name)
+    const noPlace = notesFor(input.players[1], { ...input, workedAt: {} }).lines.join(' ')
+    expect(names.some((n) => noPlace.includes(`at the ${n}`))).toBe(true)
+  })
+})

@@ -16,6 +16,7 @@
 
 import { generateText } from 'ai'
 import { createDeepSpaceAI } from 'deepspace/worker'
+import { LANDMARKS } from '../game/landmarks'
 import type { Rng } from '../game/placement'
 import type { Env } from '../../worker'
 import { AGENT_MODEL } from './builder-agent'
@@ -54,6 +55,8 @@ export interface MeetingInput {
   rng: Rng
   /** The meeting's chat so far, oldest first. */
   chat?: ChatLine[]
+  /** Where each player was working before the meeting: the landmark of their latest task. */
+  workedAt?: Record<string, string>
 }
 
 export interface MeetingOutput {
@@ -82,6 +85,14 @@ const STYLES: Record<string, string> = {
   Zia: 'sharp, notices when stories do not add up',
 }
 const styleOf = (name: string) => STYLES[name] ?? 'casual and direct'
+
+/** The island as it really is, so AI players never invent places or tasks from other games. */
+const WORLD = [
+  `The only places on the island are: ${LANDMARKS.map((l) => l.name).join(', ')}. Never name any other place.`,
+  'Tasks here are asking the builder to make things at those places: lanterns, fences, trees, boats, flowers, mushrooms, animals.',
+  'Never mention wires, pumps, vents, cranes, cannons, ropes, reactors or any task from another game.',
+  'Do not talk about an earlier round or meeting unless the chat already did.',
+].join('\n')
 
 const CHAT_STYLE = [
   'Write like real people typing in a game chat. Short, under 16 words. Casual, lowercase is fine, contractions.',
@@ -115,7 +126,7 @@ export function notesFor(bot: MeetingPlayer, input: MeetingInput): Notes {
             `You wrecked the ${last.landmark}. ${target ? `${nameOf(target)} was nearby, so blame them.` : ''}`.trim(),
             `If asked, say you were at the ${fakePlace(last, bot.id)}.`,
           ]
-        : ['You have not wrecked anything yet. Say you were busy with your tasks.'],
+        : [`You have not wrecked anything yet. If asked, say you were working at the ${input.workedAt?.[bot.id] ?? fakePlace({ landmark: '', at: 0 } as Clue, bot.id)}.`],
       suspect: target,
       sure: false,
     }
@@ -130,6 +141,8 @@ export function notesFor(bot: MeetingPlayer, input: MeetingInput): Notes {
       .filter(([id, p]) => id !== bot.id && p === place && alive.has(id))
       .map(([id]) => nameOf(id))
     lines.push(`When the ${last.landmark} got wrecked you were at the ${place}${company.length ? ` with ${company.join(', ')}` : ', alone'}.`)
+  } else if (input.workedAt?.[bot.id]) {
+    lines.push(`Before the meeting you were working on your task at the ${input.workedAt[bot.id]}.`)
   }
   for (const c of clues) {
     if (c.witnesses.includes(bot.id) && alive.has(c.impostorId)) {
@@ -234,6 +247,7 @@ export async function planMeeting(env: Env, input: MeetingInput): Promise<Meetin
       system: [
         'You write chat for AI players in Saboteur Island, a cozy social deduction party game.',
         'Crew fix up a floating island before night. One secret Impostor wrecks finished work when nobody is looking.',
+        WORLD,
         CHAT_STYLE,
         'Write the first 30 seconds of the meeting as a back and forth between the AI players: 4 to 7 lines, each player 1 or 2 lines.',
         'Players react to each other. A crew player who saw it happen says so clearly. Leave room for the humans to talk.',
@@ -302,6 +316,7 @@ export async function replyInMeeting(
       model: anthropic(AGENT_MODEL),
       system: [
         'You write chat replies for AI players in Saboteur Island, a cozy social deduction party game.',
+        WORLD,
         CHAT_STYLE,
         'A human just said something in the meeting. Write 1 or 2 replies from AI players.',
         target ? `The message is aimed at ${target.name}, so ${target.name} must answer it directly, using what they know.` : 'Pick the AI player with the most reason to answer. A second player may jump in.',

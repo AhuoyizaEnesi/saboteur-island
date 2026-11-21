@@ -580,6 +580,15 @@ async function meetingInput(tools: ActionTools, game: Row<GameRow>, salt: string
     .filter((c) => c.data.showAt <= t + 500)
     .sort((a, b) => a.data.showAt - b.data.showAt)
   const nameOfLm = (id: string) => landmarkById(id)?.name ?? 'somewhere'
+  // Where each player was working: their latest finished task, else their first open one.
+  const tasks = await loadTasks(tools, game.id)
+  const workedAt: Record<string, string> = {}
+  for (const p of players) {
+    const mine = tasks.filter((t) => t.data.playerId === p.id)
+    const done = mine.filter((t) => t.data.doneAt).sort((a, b) => b.data.doneAt - a.data.doneAt)[0]
+    const pick = done ?? mine.find((t) => t.data.status !== 'done')
+    if (pick) workedAt[p.id] = nameOfLm(pick.data.landmarkId)
+  }
   return {
     players: players.map((p) => ({
       id: p.id, name: p.data.name, isBot: Boolean(p.data.isBot), alive: Boolean(p.data.alive),
@@ -595,6 +604,7 @@ async function meetingInput(tools: ActionTools, game: Row<GameRow>, salt: string
     where: game.data.meetingWhere,
     rng: rngFor(game.id, `meeting:${salt}`, game.data.meetingNo * 1000 + chat.length),
     chat: chat.map((c) => ({ playerId: c.data.playerId, text: c.data.text })),
+    workedAt,
   }
 }
 
