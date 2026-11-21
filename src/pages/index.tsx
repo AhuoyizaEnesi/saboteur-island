@@ -35,28 +35,27 @@ export default function Landing() {
           </Link>
         </header>
         <main className="si-landing-copy">
-          <div className="si-eyebrow">A party game for 5 or 6</div>
-          <h1>Someone keeps wrecking the island.</h1>
-          <p>Fix up a floating island with an AI builder before night falls. One of you is secretly undoing the work.</p>
+          <div className="si-eyebrow">Solo or with friends</div>
+          <h1>Saboteur Island</h1>
+          <p>Prompt an AI to build. Catch the wrecker before night falls.</p>
           <div className="si-landing-cta">
             <Link to="/play" className="si-btn primary big">
               Play now
             </Link>
-            <span className="si-small">With friends, or alone against AI players.</span>
           </div>
         </main>
         <ol className="si-landing-how">
           <li>
-            <b>Walk</b> to a landmark and tell the builder what to make.
+            <b>Prompt</b> to build
           </li>
           <li>
-            <b>Smoke</b> means a finished task was wrecked. Report it.
+            <b>Report</b> the smoke
           </li>
           <li>
-            <b>Vote</b> the wrecker off before night falls.
+            <b>Vote</b> out the wrecker
           </li>
         </ol>
-        <footer className="si-landing-foot">Built on DeepSpace</footer>
+        <footer className="si-landing-foot">Someone keeps wrecking the island.</footer>
       </div>
     </>
   )
