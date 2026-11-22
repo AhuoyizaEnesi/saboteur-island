@@ -436,6 +436,18 @@ describe('a full game through the server actions', () => {
     expect(rowsOf(t, 'builds', { gameId, playerId: me.recordId }).filter((b) => b.data.type === tpl.need.type)).toHaveLength(1)
   })
 
+  it('a message in the last seconds of the discussion still gets a reply', async () => {
+    const { t, gameId } = await setup(3)
+    advance(12_000)
+    await walk(t, gameId, 'u1', { x: 1.2, z: 0.6 })
+    expect((await call(t.tools, 'game-bell', 'u1', { gameId })).success).toBe(true)
+    advance(MEETING_MS - 2_000)
+    const sent = Date.now()
+    expect((await call(t.tools, 'game-chat', 'u1', { gameId, text: 'anyone?' })).success).toBe(true)
+    const me = rowsOf(t, 'players', { gameId }).find((p) => p.data.userId === 'u1')!
+    expect(rowsOf(t, 'chat', { gameId }).some((c) => c.data.playerId !== me.recordId && Number(c.data.showAt) > sent)).toBe(true)
+  })
+
   it('a message drops queued AI lines, so replies follow it in order and nobody talks twice in a row', async () => {
     const { t, gameId } = await setup(3)
     advance(12_000)

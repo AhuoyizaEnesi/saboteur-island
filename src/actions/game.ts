@@ -1227,7 +1227,9 @@ async function sendChat({ env, userId, params, tools }: Ctx): Promise<ActionResu
   // AI players answer every human message, within a per meeting budget.
   const voting = game.data.phase === 'vote'
   const used = game.data.replyCalls ?? 0
-  if (used < MAX_REPLY_CALLS && game.data.phaseEndsAt - t > 3_500 && players.some((p) => p.data.isBot && p.data.alive)) {
+  // Near the end of the discussion a reply still comes, since voting follows with the chat open; only the end of voting cuts it off.
+  const timeLeft = game.data.phase === 'meeting' ? Infinity : game.data.phaseEndsAt - t
+  if (used < MAX_REPLY_CALLS && timeLeft > 3_500 && players.some((p) => p.data.isBot && p.data.alive)) {
     await patchGame(tools, game.id, { replyCalls: used + 1 })
     // AI lines planned before this message and not on screen yet are dropped,
     // so the replies come right after it and nobody talks twice in a row.
@@ -1241,8 +1243,12 @@ async function sendChat({ env, userId, params, tools }: Ctx): Promise<ActionResu
       voting,
       votes: votes.map((v) => ({ playerId: v.data.voterId, targetId: v.data.targetId, firm: firm.has(v.data.voterId) })),
     })
-    let at = Date.now() + 1_200
-    for (const line of reply.lines) {
+    // Two quick messages get their replies written at the same time. An AI player who already
+    // has a line after this message does not answer again, and new lines go after any queued ones.
+    const since = (await query<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo: game.data.meetingNo }, 200)).filter((c) => c.data.showAt >= t && botIds.has(c.data.playerId))
+    const spoke = new Set(since.map((c) => c.data.playerId))
+    let at = Math.max(Date.now() + 1_200, ...since.map((c) => c.data.showAt + 1_800))
+    for (const line of reply.lines.filter((l) => !spoke.has(l.playerId))) {
       await create<ChatRow>(tools, 'chat', { gameId: game.id, meetingNo: game.data.meetingNo, playerId: line.playerId, text: line.text, showAt: at })
       at += 1_800 + Math.round(input.rng() * 1_800)
     }

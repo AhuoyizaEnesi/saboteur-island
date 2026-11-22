@@ -407,6 +407,10 @@ describe('chatty AI and open votes', () => {
     expect(addressedBot(input, { playerId: 'h', text: 'Mo where were you?' })?.id).toBe('m')
     expect(addressedBot(input, { playerId: 'h', text: 'are you sure?' })?.id).toBe('a')
     expect(addressedBot(input, { playerId: 'h', text: 'ok lets think' })).toBeNull()
+    // Two names: the one named first is being asked, whatever the seat order.
+    const second = players.filter((p) => p.isBot)[1]
+    const first = players.filter((p) => p.isBot)[0]
+    expect(addressedBot(input, { playerId: 'h', text: `${second.name}, how do you know ${first.name} was there?` })?.id).toBe(second.id)
   })
   it('the AI player spoken to always answers, even without the model', () => {
     const out = heuristicReply(base(), { playerId: 'h', text: 'Ada where were you' }, { voting: false, votes: [] })
@@ -466,6 +470,9 @@ describe('meeting notes', () => {
     }
     expect(notesFor(input.players[0], input).lines.join(' ')).toContain('at the Orchard')
     expect(notesFor(input.players[1], input).lines.join(' ')).toContain('at the Dock')
+    // Who else had a task at the same place, so nobody claims to be alone there.
+    const shared = { ...input, workedAt: { a: 'Orchard', r: 'Orchard' } }
+    expect(notesFor(input.players[0], shared).lines.join(' ')).toMatch(/Rex had a task there too/)
     const names = LANDMARKS.map((l) => l.name)
     const noPlace = notesFor(input.players[1], { ...input, workedAt: {} }).lines.join(' ')
     expect(names.some((n) => noPlace.includes(`at the ${n}`))).toBe(true)

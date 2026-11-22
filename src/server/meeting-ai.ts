@@ -150,7 +150,11 @@ export function notesFor(bot: MeetingPlayer, input: MeetingInput): Notes {
       .map(([id]) => nameOf(id))
     lines.push(`When the ${last.landmark} got wrecked you were at the ${place}${company.length ? ` with ${company.join(', ')}` : ', alone'}.`)
   } else if (input.workedAt?.[bot.id]) {
-    lines.push(`Before the meeting you were working on your task at the ${input.workedAt[bot.id]}.`)
+    const spot = input.workedAt[bot.id]
+    const others = Object.entries(input.workedAt)
+      .filter(([id, p]) => id !== bot.id && p === spot && alive.has(id))
+      .map(([id]) => nameOf(id))
+    lines.push(`Before the meeting you were working on your task at the ${spot}${others.length ? `. ${others.join(' and ')} had a task there too` : ''}.`)
   }
   for (const c of clues) {
     if (c.witnesses.includes(bot.id) && alive.has(c.impostorId)) {
@@ -274,7 +278,10 @@ export async function planMeeting(env: Env, input: MeetingInput): Promise<Meetin
     for (const l of (parsed?.lines as { name?: string; text?: string }[] | undefined) ?? []) {
       const p = byName(l.name)
       if (!p || !p.isBot || !p.alive || typeof l.text !== 'string' || !l.text.trim()) continue
-      lines.push({ playerId: p.id, text: clean(l.text) })
+      const text = clean(l.text)
+      // The model sometimes writes a line twice, or one player twice in a row.
+      if (lines.some((x) => x.text.toLowerCase() === text.toLowerCase()) || lines.at(-1)?.playerId === p.id) continue
+      lines.push({ playerId: p.id, text })
     }
     if (lines.length) return { lines: lines.slice(0, 8), votes: [], usedModel: true }
   } catch (err) {
@@ -295,7 +302,11 @@ export interface ReplyOutput {
 /** The AI player a message is talking to: named, or the last AI who spoke if the message says "you". */
 export function addressedBot(input: MeetingInput, message: ChatLine): MeetingPlayer | null {
   const bots = input.players.filter((p) => p.isBot && p.alive)
-  const named = bots.find((b) => new RegExp(`\\b${b.name}\\b`, 'i').test(message.text))
+  // The player named first in the message is the one being asked ("Rex, how do you know Juno was there?").
+  const named = bots
+    .map((b) => ({ b, at: message.text.search(new RegExp(`\\b${b.name}\\b`, 'i')) }))
+    .filter((x) => x.at >= 0)
+    .sort((x, y) => x.at - y.at)[0]?.b
   if (named) return named
   if (/\b(you|u|ur|your)\b/i.test(message.text)) {
     const before = (input.chat ?? []).filter((l) => l.playerId !== message.playerId)
