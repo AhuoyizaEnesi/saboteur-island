@@ -97,8 +97,16 @@ const WORLD = [
 const CHAT_STYLE = [
   'Write like real people typing in a game chat. Short, under 16 words. Casual, lowercase is fine, contractions.',
   'React to what was just said. Ask questions back. Defend yourself if accused. Agree or argue with others.',
-  'Never formal, never robotic, never mention being an AI. No emojis, no dashes, no hashtags, no quotes.',
+  'Never repeat a question or claim that is already in the chat. If someone answered it, react to the answer or move on. Vary your wording.',
+  'Call players by name or they. Never guess he or she.',
+  'Never formal, never robotic. Do not bring up being an AI. If someone asks, say yes, you are an AI player, then get back to the game.',
+  'No emojis, no dashes, no hashtags, no quotes.',
 ].join('\n')
+
+/** How long a meeting call may take before the no-model fallback answers instead, so nobody is left without a reply. */
+const REPLY_MS = 7_000
+const OPENING_MS = 10_000
+const VOTES_MS = 8_000
 
 // ─── private notes ───────────────────────────────────────────────────────────
 
@@ -229,8 +237,12 @@ function byNameIn(input: MeetingInput) {
   return (n: unknown) => (typeof n === 'string' ? input.players.find((p) => p.name.toLowerCase() === n.trim().toLowerCase()) : undefined)
 }
 
-function sceneLine(input: MeetingInput): string {
-  return input.reason === 'report' ? `${input.callerName} found something wrecked at the ${input.where} and called this meeting.` : `${input.callerName} rang the bell.`
+/** Why the meeting was called, and the truth about wrecks so far, so nobody invents one. */
+export function sceneLine(input: MeetingInput): string {
+  const called = input.reason === 'report' ? `${input.callerName} found something wrecked at the ${input.where} and called this meeting.` : `${input.callerName} rang the bell.`
+  const latest = [...input.clues].sort((a, b) => b.at - a.at)[0]
+  const wrecks = latest ? `The latest wreck was at the ${latest.landmark}.` : 'Nothing has been wrecked yet this game. Do not say anything was wrecked or broken.'
+  return `${called} ${wrecks}`
 }
 
 // ─── opening lines ───────────────────────────────────────────────────────────
@@ -244,6 +256,7 @@ export async function planMeeting(env: Env, input: MeetingInput): Promise<Meetin
     const roster = input.players.filter((p) => p.alive).map((p) => `${p.name}${p.isBot ? '' : ' (human)'}`).join(', ')
     const result = await generateText({
       model: anthropic(AGENT_MODEL),
+      abortSignal: AbortSignal.timeout(OPENING_MS),
       system: [
         'You write chat for AI players in Saboteur Island, a cozy social deduction party game.',
         'Crew fix up a floating island before night. One secret Impostor wrecks finished work when nobody is looking.',
@@ -318,6 +331,7 @@ export async function replyInMeeting(
       : ''
     const result = await generateText({
       model: anthropic(AGENT_MODEL),
+      abortSignal: AbortSignal.timeout(REPLY_MS),
       system: [
         'You write chat replies for AI players in Saboteur Island, a cozy social deduction party game.',
         WORLD,
@@ -433,6 +447,7 @@ export async function planVotes(env: Env, input: MeetingInput): Promise<MeetingO
     const anthropic = createDeepSpaceAI(env, 'anthropic')
     const result = await generateText({
       model: anthropic(AGENT_MODEL),
+      abortSignal: AbortSignal.timeout(VOTES_MS),
       system: [
         'You decide votes for AI players in Saboteur Island, a social deduction party game. The player with the most votes is ejected.',
         'Crew vote for whoever has the strongest case from their notes and the chat: an eyewitness, someone two players accuse, someone whose story does not add up.',

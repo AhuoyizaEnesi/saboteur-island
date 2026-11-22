@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { legalMove, seatSpot } from '../actions/game'
 import { __test as builder } from '../server/builder-agent'
-import { addressedBot, chatBefore, chatHeat, heuristicMeeting, heuristicReply, heuristicVotes, notesFor, type MeetingInput } from '../server/meeting-ai'
+import { addressedBot, chatBefore, chatHeat, sceneLine, heuristicMeeting, heuristicReply, heuristicVotes, notesFor, type MeetingInput } from '../server/meeting-ai'
 import { BOT_SPEED, routeDone, routePos, stayLeg, walkLeg } from './bots'
 import { ISLAND, MEETING_SPOT, POS_SLACK, WALK_SPEED } from './constants'
 import { LANDMARKS, landmarkById, walkable } from './landmarks'
@@ -479,5 +479,15 @@ describe('place words', () => {
     expect(askedForPlace('a tree', 'Orchard')).toBe(false)
     expect(askedForPlace('a duck by the orchard', 'Orchard')).toBe(false)
     expect(askedForPlace('two tents the color of a pumpkin', 'Camp')).toBe(false)
+  })
+})
+
+describe('meeting scene', () => {
+  it('tells the AI players when nothing has been wrecked, so they do not invent a wreck', () => {
+    const base: MeetingInput = { players: [], clues: [], callerName: 'Peace', reason: 'bell', where: '', rng: makeRng(1) }
+    expect(sceneLine(base)).toMatch(/Nothing has been wrecked yet/)
+    const later = sceneLine({ ...base, clues: [{ landmark: 'Dock', at: 5, impostorId: 'x', nearby: [], witnesses: [] }] })
+    expect(later).toMatch(/latest wreck was at the Dock/)
+    expect(later).not.toMatch(/Nothing has been wrecked/)
   })
 })
